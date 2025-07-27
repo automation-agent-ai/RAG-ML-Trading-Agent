@@ -28,9 +28,8 @@ class MLFeatureMerger:
         logger.info("🔄 Merging text-based features...")
         
         try:
-            # Use different database based on mode
-            db_to_use = self.prediction_db_path if mode == 'prediction' else self.db_path
-            conn = duckdb.connect(db_to_use)
+            # Always use the main database for reading features
+            conn = duckdb.connect(self.db_path)
             
             # Check if required tables exist
             required_tables = ['news_features', 'userposts_features', 'analyst_recommendations_features']
@@ -225,9 +224,8 @@ class MLFeatureMerger:
         logger.info("🔄 Merging financial features...")
         
         try:
-            # Use different database based on mode
-            db_to_use = self.prediction_db_path if mode == 'prediction' else self.db_path
-            conn = duckdb.connect(db_to_use)
+            # Always use the main database for reading features
+            conn = duckdb.connect(self.db_path)
             
             # Check if required tables exist
             required_tables = ['setups', 'fundamentals', 'financial_ratios', 'company_info', 'fundamentals_features']
