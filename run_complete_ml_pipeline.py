@@ -16,6 +16,7 @@ import numpy as np
 from datetime import datetime
 from pathlib import Path
 import logging
+import duckdb
 from typing import List, Dict, Any, Optional
 
 # Configure logging
@@ -24,6 +25,13 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Add project root to path for proper imports
+project_root = Path(__file__).parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from core.ml_feature_merger import MLFeatureMerger
 
 class CompletePipeline:
     """Complete pipeline for feature extraction and ML feature table creation"""
@@ -39,7 +47,6 @@ class CompletePipeline:
         self.prediction_db_path = prediction_db_path
         
         # Initialize feature merger
-        from core.ml_feature_merger import MLFeatureMerger
         self.feature_merger = MLFeatureMerger(db_path=db_path)
         
         # Initialize agents and embedders lazily
@@ -395,7 +402,6 @@ class CompletePipeline:
 def main():
     """Run the complete pipeline"""
     import argparse
-    import duckdb
     
     parser = argparse.ArgumentParser(description='Run complete ML pipeline')
     parser.add_argument('--mode', choices=['training', 'prediction'], default='training',
