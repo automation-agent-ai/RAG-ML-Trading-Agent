@@ -732,21 +732,29 @@ Return ONLY the JSON object."""
             # Try to open the table directly
             try:
                 import lancedb
-                db = lancedb.connect(self.lancedb_dir)
+                import os
+                
+                # Use absolute path
+                abs_lancedb_dir = os.path.abspath(self.lancedb_dir)
+                logger.info(f"Connecting to LanceDB at absolute path: {abs_lancedb_dir}")
+                db = lancedb.connect(abs_lancedb_dir)
+                
+                # List available tables
+                tables = db.table_names()
+                logger.info(f"Available tables: {tables}")
                 
                 # Try both table names
                 for table_name in ['userposts_embeddings_training', 'userposts_embeddings']:
-                    try:
-                        self.training_table = db.open_table(table_name)
-                        logger.info(f"Successfully opened {table_name} for similarity search")
-                        break
-                    except Exception as e:
-                        logger.warning(f"Could not open {table_name}: {e}")
+                    if table_name in tables:
+                        try:
+                            self.training_table = db.open_table(table_name)
+                            logger.info(f"Successfully opened {table_name} for similarity search")
+                            break
+                        except Exception as e:
+                            logger.warning(f"Could not open {table_name}: {e}")
                 
                 if self.training_table is None:
-                    # List available tables
-                    tables = db.table_names()
-                    logger.info(f"Available tables: {tables}")
+                    logger.warning("No suitable training table found")
                     return []
             except Exception as e:
                 logger.error(f"Error connecting to LanceDB: {e}")
