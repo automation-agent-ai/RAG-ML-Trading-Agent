@@ -334,65 +334,83 @@ class DataManager:
         # Track affected counts
         affected_counts = {}
         
-        # Define similarity-based columns for each domain
-        similarity_columns = {
-            "news": [
-                "positive_signal_strength", "negative_risk_score", 
-                "neutral_probability", "historical_pattern_confidence",
-                "similar_cases_count"
-            ],
-            "fundamentals": [
-                "positive_signal_strength", "negative_risk_score", 
-                "neutral_probability", "historical_pattern_confidence",
-                "similar_cases_count"
-            ],
-            "analyst_recommendations": [
-                "positive_signal_strength", "negative_risk_score", 
-                "neutral_probability", "historical_pattern_confidence",
-                "similar_cases_count"
-            ],
-            "userposts": [
-                "positive_signal_strength", "negative_risk_score", 
-                "neutral_probability", "historical_pattern_confidence",
-                "similar_cases_count"
-            ]
-        }
-        
         # Process each domain
         for domain in self.domains:
-            if domain not in similarity_columns:
-                logger.warning(f"No similarity columns defined for domain: {domain}")
-                continue
-                
             logger.info(f"Resetting similarity features for domain: {domain}")
             
             # Table name
             feature_table = f"{domain}_features"
             
             try:
-                # Build update query to reset similarity features
-                columns = similarity_columns[domain]
-                set_clauses = [f"{col} = NULL" for col in columns]
-                update_query = f"""
-                UPDATE {feature_table}
-                SET {', '.join(set_clauses)}
+                # Get all columns for this table
+                columns_query = f"PRAGMA table_info({feature_table})"
+                columns_df = self.duckdb_conn.execute(columns_query).df()
+                all_columns = columns_df['name'].tolist()
+                
+                # Get setup_id rows that need updating
+                setup_query = f"""
+                SELECT * FROM {feature_table}
                 WHERE setup_id IN (
                     SELECT UNNEST(?::VARCHAR[])
                 )
+                LIMIT 1
                 """
                 
-                # Execute update
-                self.duckdb_conn.execute(update_query, [prediction_setups])
-                
-                # Get count of affected rows
-                affected_count = self.duckdb_conn.execute(
-                    f"SELECT COUNT(*) FROM {feature_table} WHERE setup_id IN (SELECT UNNEST(?::VARCHAR[]))",
-                    [prediction_setups]
-                ).fetchone()[0]
-                
-                # Record count
-                affected_counts[domain] = affected_count
-                logger.info(f"Reset similarity features for {affected_count} rows in {feature_table}")
+                try:
+                    # Try to get one row to check column values
+                    sample_row = self.duckdb_conn.execute(setup_query, [prediction_setups]).df()
+                    
+                    if not sample_row.empty:
+                        # Identify similarity-related columns by checking for non-null values
+                        # We'll use a simple heuristic: columns that might contain similarity features
+                        # typically have names containing these keywords
+                        similarity_keywords = ['similar', 'confidence', 'probability', 'signal', 'risk', 'score', 'prediction']
+                        
+                        # Filter columns that might be similarity-related
+                        potential_similarity_columns = []
+                        for col in all_columns:
+                            # Skip setup_id and timestamp columns
+                            if col == 'setup_id' or 'timestamp' in col or 'model' in col:
+                                continue
+                                
+                            # Check if column name contains any similarity keyword
+                            if any(keyword in col.lower() for keyword in similarity_keywords):
+                                potential_similarity_columns.append(col)
+                        
+                        if potential_similarity_columns:
+                            # Build update query to reset similarity features
+                            set_clauses = [f"{col} = NULL" for col in potential_similarity_columns]
+                            update_query = f"""
+                            UPDATE {feature_table}
+                            SET {', '.join(set_clauses)}
+                            WHERE setup_id IN (
+                                SELECT UNNEST(?::VARCHAR[])
+                            )
+                            """
+                            
+                            # Execute update
+                            self.duckdb_conn.execute(update_query, [prediction_setups])
+                            
+                            # Get count of affected rows
+                            affected_count = self.duckdb_conn.execute(
+                                f"SELECT COUNT(*) FROM {feature_table} WHERE setup_id IN (SELECT UNNEST(?::VARCHAR[]))",
+                                [prediction_setups]
+                            ).fetchone()[0]
+                            
+                            # Record count
+                            affected_counts[domain] = affected_count
+                            logger.info(f"Reset {len(potential_similarity_columns)} similarity features for {affected_count} rows in {feature_table}")
+                            logger.info(f"Reset columns: {', '.join(potential_similarity_columns)}")
+                        else:
+                            logger.warning(f"No similarity-related columns found in {feature_table}")
+                            affected_counts[domain] = 0
+                    else:
+                        logger.warning(f"No matching rows found in {feature_table} for the prediction setups")
+                        affected_counts[domain] = 0
+                        
+                except Exception as e:
+                    logger.error(f"Error analyzing table structure for {domain}: {e}")
+                    affected_counts[domain] = 0
                 
             except Exception as e:
                 logger.error(f"Error resetting similarity features for {domain}: {e}")
@@ -494,6 +512,10 @@ def main():
     reset_parser.add_argument(
         "--db-path", default="data/sentiment_system.duckdb",
         help="Path to DuckDB database"
+    )
+    reset_parser.add_argument(
+        "--lancedb-dir", default="lancedb_store",
+        help="LanceDB directory"
     )
     reset_parser.add_argument(
         "--domains", nargs="+", 

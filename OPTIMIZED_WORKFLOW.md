@@ -1,192 +1,247 @@
-# Optimized Training/Prediction Workflow
+# Optimized ML Pipeline Workflow
 
-This document explains the optimized workflow for separating training and prediction data without unnecessary re-embedding.
+This guide provides a step-by-step walkthrough of the optimized workflow for training/prediction separation in the ML pipeline, focusing on efficiency and preventing data leakage.
 
-## Overview
+## Workflow Overview
 
-The optimized workflow preserves original embeddings with labels, allowing you to:
+The optimized workflow is designed to:
 
-1. Use some setups for prediction (without labels)
-2. Later restore those same setups back to training (with labels)
-3. Avoid the computational cost of re-embedding
-
-This is particularly useful for historical data analysis and backtesting.
+1. Maintain a clear separation between training and prediction data
+2. Avoid unnecessary re-computation of features
+3. Enable proper evaluation of prediction performance
+4. Support ensemble prediction across multiple domains
 
 ## Workflow Diagram
 
 ```
-┌─────────────────────┐
-│  Original Embeddings│
-│  (with labels)      │
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│  Preserve Embeddings│
-│  for Prediction     │
-└─────────┬───────────┘
-          │
-          │    ┌───────────────────┐
-          ├───▶│  Saved Embeddings │
-          │    │  (with labels)    │
-          │    └─────────┬─────────┘
-          │              │
-          ▼              │
-┌─────────────────────┐  │
-│  Remove from        │  │
-│  Training Tables    │  │
-└─────────┬───────────┘  │
-          │              │
-          ▼              │
-┌─────────────────────┐  │
-│  Create Prediction  │  │
-│  Embeddings         │  │
-│  (without labels)   │  │
-└─────────┬───────────┘  │
-          │              │
-          ▼              │
-┌─────────────────────┐  │
-│  Run Prediction     │  │
-│  & Evaluation       │  │
-└─────────┬───────────┘  │
-          │              │
-          ▼              │
-┌─────────────────────┐  │
-│  Restore Original   │◀─┘
-│  Embeddings to      │
-│  Training Tables    │
-└─────────────────────┘
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│  Select Setups  │────▶│ Preserve Data   │────▶│ Remove from     │
+│  for Prediction │     │                 │     │ Training        │
+│                 │     │                 │     │                 │
+└─────────────────┘     └─────────────────┘     └────────┬────────┘
+                                                         │
+                                                         ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│  Restore Data   │◀────│ Evaluate        │◀────│ Reset Similarity│
+│  (when needed)  │     │ Predictions     │     │ Features        │
+│                 │     │                 │     │                 │
+└─────────────────┘     └─────────────────┘     └────────┬────────┘
+                                                         │
+                                                         ▼
+                                               ┌─────────────────┐
+                                               │                 │
+                                               │ Create          │
+                                               │ Embeddings      │
+                                               │ & Features      │
+                                               │                 │
+                                               └────────┬────────┘
+                                                        │
+                                                        ▼
+                                               ┌─────────────────┐
+                                               │                 │
+                                               │ Ensemble        │
+                                               │ Prediction      │
+                                               │                 │
+                                               └─────────────────┘
 ```
 
-## Step-by-Step Guide
+## Preparation: Offline Model Caching (Recommended)
 
-### 1. Select Prediction Setups
-
-First, identify which setups to use for prediction:
+To avoid HTTP 429 errors and rate limiting issues with Hugging Face, we recommend setting up offline model caching before running the pipeline:
 
 ```bash
-# Create a list of 100 random setups for prediction
+# Step 1: Download and cache the model
+python download_models.py
+
+# Step 2: Patch the pipeline to use cached models
+python use_cached_model.py
+```
+
+See the [Offline Model Caching Guide](OFFLINE_MODEL_GUIDE.md) for more details.
+
+## Detailed Steps
+
+### 1. Select Setups for Prediction
+
+Choose which setups to use for prediction (typically a random subset of setups with complete data).
+
+```bash
 python create_prediction_list.py --count 100 --output data/prediction_setups.txt
 ```
 
-### 2. Preserve Original Embeddings
+**Options:**
+- `--count`: Number of setups to select
+- `--db-path`: Path to DuckDB database
+- `--output`: Output file for setup IDs
+- `--random-seed`: Random seed for reproducibility
 
-Before removing these setups from training, preserve their embeddings:
+### 2. Preserve Data
+
+Save the original embeddings and features for the prediction setups before removing them from training.
 
 ```bash
-# Save the original embeddings with labels
 python preserve_restore_embeddings.py preserve --prediction-setup-file data/prediction_setups.txt
 ```
 
-This saves the embeddings to a pickle file (e.g., `data/preserved_embeddings_20230101_120000.pkl`).
+**What it does:**
+- Extracts embeddings for prediction setups from each domain's embedding table
+- Extracts features for prediction setups from each domain's feature table
+- Saves both to a timestamped pickle file for later restoration
 
-### 3. Remove from Training Tables
+### 3. Remove from Training
 
-Remove these setups from the training tables:
+Remove the prediction setups from training tables to ensure proper separation.
 
 ```bash
-# Remove the setups from training tables
 python preserve_restore_embeddings.py remove --prediction-setup-file data/prediction_setups.txt
 ```
 
-### 4. Create Prediction Embeddings
+**What it does:**
+- Removes embeddings for prediction setups from each domain's embedding table
+- Removes features for prediction setups from each domain's feature table
+- This ensures these setups won't influence training or similarity calculations
 
-Create embeddings for prediction (without labels):
+### 4. Reset Similarity Features (Optional but Recommended)
+
+Reset only the similarity-based features while keeping the raw features intact:
 
 ```bash
-# Create embeddings without labels for prediction
-python run_enhanced_ml_pipeline.py --mode prediction --setup-list data/prediction_setups.txt --step embeddings
+python preserve_restore_embeddings.py reset-similarity --prediction-setup-file data/prediction_setups.txt
 ```
 
-### 5. Run Prediction
+**What it does:**
+- Resets only the similarity-based features (like positive_signal_strength, negative_risk_score, etc.)
+- Keeps the raw extracted features intact
+- This is more efficient than re-extracting all features
 
-Extract features and make predictions:
+### 5. Create Prediction Embeddings and Features
+
+Create new embeddings and extract features for the prediction setups (without labels).
 
 ```bash
-# Run feature extraction and prediction
-python run_enhanced_ml_pipeline.py --mode prediction --setup-list data/prediction_setups.txt --step features
+python run_enhanced_ml_pipeline.py --mode prediction --setup-list data/prediction_setups.txt --domains all
 ```
 
-### 6. Evaluate Predictions
+**What it does:**
+- Creates embeddings for the specified setups in prediction mode
+- Stores them in separate `{domain}_embeddings_prediction` tables
+- Extracts features for these setups using the prediction embeddings
+- Creates ML feature tables for prediction:
+  - `text_ml_features_prediction`: Contains text-based features from all domains
+  - `financial_features_prediction`: Contains financial metrics
 
-Evaluate the prediction performance:
+**Note:** This step handles both embedding creation and feature extraction in a single command.
+
+### 6. Create Ensemble Predictions
+
+Combine predictions from all domains to create ensemble predictions.
 
 ```bash
-# Evaluate prediction performance
-python evaluate_predictions.py
+python ensemble_prediction.py --method weighted --setup-list data/prediction_setups.txt --output data/ensemble_predictions.csv
 ```
 
-### 7. Restore Original Embeddings
+**Options:**
+- `--method`: Ensemble method (`majority` or `weighted`)
+- `--domains`: Domains to include
+- `--weights`: Custom weights for each domain
 
-After evaluation, restore the original embeddings back to training:
+**Note:** If this step fails with "No predictions found", ensure that Step 5 completed successfully and check that the similarity_predictions table contains entries for your prediction setups.
+
+### 7. Evaluate Predictions
+
+Evaluate prediction performance against the actual labels.
 
 ```bash
-# Add the original embeddings back to training tables
-python preserve_restore_embeddings.py restore --preserved-file data/preserved_embeddings_*.pkl
+python evaluate_predictions.py --predictions data/ensemble_predictions.csv
 ```
 
-## Benefits
+**What it does:**
+- Loads the preserved labels for the prediction setups
+- Compares predictions against actual labels
+- Calculates metrics like accuracy, precision, recall, F1 score
+- Generates confusion matrices and other visualizations
 
-This optimized workflow provides several advantages:
+### 8. Restore Data (When Needed)
 
-1. **Computational Efficiency**: Avoids re-embedding, which is computationally expensive
-2. **Data Integrity**: Preserves the original embeddings with their labels
-3. **Flexibility**: Allows you to easily move setups between training and prediction
-4. **Reproducibility**: Maintains consistent embeddings across experiments
-
-## Use Cases
-
-### Historical Backtesting
-
-When working with historical data where all labels are known:
-
-1. Select different subsets for prediction in each experiment
-2. Preserve/restore embeddings to avoid re-embedding
-3. Compare performance across different prediction sets
-
-### Incremental Learning
-
-As new data becomes available:
-
-1. Initially create prediction embeddings without labels
-2. After labels become available, create training embeddings
-3. Add these to your training set for future predictions
-
-## Script Reference
-
-### preserve_restore_embeddings.py
+When you're ready to return to training with the full dataset:
 
 ```bash
-# Preserve embeddings
-python preserve_restore_embeddings.py preserve --prediction-setup-file FILE
-
-# Restore embeddings
-python preserve_restore_embeddings.py restore --preserved-file FILE
-
-# Remove setups from training
-python preserve_restore_embeddings.py remove --prediction-setup-file FILE
+python preserve_restore_embeddings.py restore --preserved-file data/preserved_data_20230101.pkl
 ```
 
-### create_prediction_list.py
+**What it does:**
+- Restores the original embeddings back to the training tables
+- Restores the original features back to the feature tables
+- This avoids having to re-embed or re-extract features for these setups
+
+## Feature Tables Created
+
+The pipeline creates several types of feature tables:
+
+1. **Domain-specific feature tables**:
+   - `news_features`: Raw and similarity-based features from news
+   - `fundamentals_features`: Raw and similarity-based features from fundamentals
+   - `analyst_recommendations_features`: Raw and similarity-based features from analyst recommendations
+   - `userposts_features`: Raw and similarity-based features from user posts
+
+2. **ML feature tables**:
+   - `text_ml_features_training`: Combined text features for training
+   - `text_ml_features_prediction`: Combined text features for prediction
+   - `financial_features_training`: Financial metrics for training
+   - `financial_features_prediction`: Financial metrics for prediction
+
+3. **Prediction tables**:
+   - `similarity_predictions`: Contains predictions from each domain
+   - `ensemble_predictions`: Contains combined predictions across domains (saved to CSV)
+
+## Troubleshooting
+
+### HTTP 429 Errors
+
+If you encounter HTTP 429 errors (Too Many Requests) when downloading models from Hugging Face:
+
+1. Set up offline model caching as described in the preparation section
+2. See the [Offline Model Caching Guide](OFFLINE_MODEL_GUIDE.md) for more details
+
+### No Predictions Found
+
+If the ensemble prediction step fails with "No predictions found":
+
+1. Check that Step 5 completed successfully
+2. Verify that the `similarity_predictions` table exists and contains entries:
+   ```bash
+   python -c "import duckdb; conn = duckdb.connect('data/sentiment_system.duckdb'); print(conn.execute('SELECT COUNT(*) FROM similarity_predictions').fetchone())"
+   ```
+3. If the table is empty, you may need to check the agent code to ensure predictions are being saved correctly
+
+### Missing Import Error
+
+If you see "NameError: name 'os' is not defined" in agent files:
 
 ```bash
-# Create a list of prediction setups
-python create_prediction_list.py --count COUNT --output FILE
+echo "import os" | cat - agents/analyst_recommendations/enhanced_analyst_recommendations_agent_duckdb.py > temp && mv temp agents/analyst_recommendations/enhanced_analyst_recommendations_agent_duckdb.py
 ```
 
-### run_enhanced_ml_pipeline.py
+### Other Issues
 
-```bash
-# Run specific steps of the pipeline
-python run_enhanced_ml_pipeline.py --mode MODE --setup-list FILE --step STEP
-```
+- **Missing embeddings**: Check that the embedding tables exist and contain data
+- **Feature extraction errors**: Check the logs for specific error messages
+- **Prediction errors**: Verify that the prediction setups have been properly processed
 
-### evaluate_predictions.py
+## Performance Considerations
 
-```bash
-# Evaluate predictions for all domains
-python evaluate_predictions.py
+- **Embedding creation** is typically the most computationally intensive step
+- **Feature extraction** time depends on the number of similar cases to process
+- **Ensemble prediction** is relatively fast even with large datasets
+- The optimized workflow minimizes re-computation by preserving and restoring data
 
-# Evaluate predictions for a specific domain
-python evaluate_predictions.py --domain DOMAIN
-``` 
+## Conclusion
+
+This optimized workflow provides a balance between:
+- Proper separation of training and prediction data
+- Computational efficiency
+- Accurate evaluation of prediction performance
+
+By following these steps, you can ensure that your predictions are not influenced by data leakage while still maintaining efficient use of computational resources. 

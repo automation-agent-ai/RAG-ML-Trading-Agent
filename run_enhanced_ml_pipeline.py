@@ -51,100 +51,89 @@ class EnhancedPipeline:
         self.prediction_db_path = prediction_db_path
         
         # Initialize feature merger
-        self.feature_merger = MLFeatureMerger(db_path=db_path)
+        self.feature_merger = MLFeatureMerger(
+            db_path=db_path,
+            prediction_db_path=prediction_db_path
+        )
         
-        # Initialize agents lazily
+        # Agents will be initialized later with the appropriate mode
         self.news_agent = None
         self.fundamentals_agent = None
         self.analyst_agent = None
         self.userposts_agent = None
-        
-        # Domain tables
-        self.domains = ["news", "fundamentals", "analyst_recommendations", "userposts"]
-        
+
     def _init_agents(self, mode: str = "training"):
-        """Initialize all agents with appropriate mode"""
-        if not hasattr(self, 'news_agent') or self.news_agent is None:
-            from agents.news.enhanced_news_agent_duckdb import EnhancedNewsAgentDuckDB
-            self.news_agent = EnhancedNewsAgentDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                mode=mode
-            )
-            
-        if not hasattr(self, 'fundamentals_agent') or self.fundamentals_agent is None:
-            from agents.fundamentals.enhanced_fundamentals_agent_duckdb import EnhancedFundamentalsAgentDuckDB
-            self.fundamentals_agent = EnhancedFundamentalsAgentDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                mode=mode
-            )
-            
-        if not hasattr(self, 'analyst_agent') or self.analyst_agent is None:
-            from agents.analyst_recommendations.enhanced_analyst_recommendations_agent_duckdb import EnhancedAnalystRecommendationsAgentDuckDB
-            self.analyst_agent = EnhancedAnalystRecommendationsAgentDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                mode=mode
-            )
-            
-        if not hasattr(self, 'userposts_agent') or self.userposts_agent is None:
-            from agents.userposts.enhanced_userposts_agent_complete import EnhancedUserPostsAgentComplete
-            self.userposts_agent = EnhancedUserPostsAgentComplete(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                mode=mode
-            )
-    
+        """Initialize agents with the appropriate mode"""
+        # Initialize News Agent
+        from agents.news.enhanced_news_agent_duckdb import EnhancedNewsAgentDuckDB
+        self.news_agent = EnhancedNewsAgentDuckDB(
+            db_path=self.db_path,
+            lancedb_dir=self.lancedb_dir,
+            mode=mode
+        )
+        
+        # Initialize Fundamentals Agent
+        from agents.fundamentals.enhanced_fundamentals_agent_duckdb import EnhancedFundamentalsAgentDuckDB
+        self.fundamentals_agent = EnhancedFundamentalsAgentDuckDB(
+            db_path=self.db_path,
+            lancedb_dir=self.lancedb_dir,
+            mode=mode
+        )
+        
+        # Initialize Analyst Recommendations Agent
+        from agents.analyst_recommendations.enhanced_analyst_recommendations_agent_duckdb import EnhancedAnalystRecommendationsAgentDuckDB
+        self.analyst_agent = EnhancedAnalystRecommendationsAgentDuckDB(
+            db_path=self.db_path,
+            lancedb_dir=self.lancedb_dir,
+            mode=mode
+        )
+        
+        # Initialize UserPosts Agent
+        from agents.userposts.enhanced_userposts_agent_complete import EnhancedUserPostsAgentComplete
+        self.userposts_agent = EnhancedUserPostsAgentComplete(
+            db_path=self.db_path,
+            lancedb_dir=self.lancedb_dir,
+            mode=mode
+        )
+
     def find_training_setups(self) -> List[str]:
-        """Find setups for training (with complete data and labels)"""
+        """Find setups with complete data for training"""
         conn = duckdb.connect(self.db_path)
         
-        # Find setups with complete data and labels
-        query = """
-        WITH required_features AS (
-            SELECT setup_id 
-            FROM fundamentals_features
-            INTERSECT
-            SELECT setup_id 
-            FROM news_features
-            INTERSECT
-            SELECT setup_id 
-            FROM userposts_features
-            INTERSECT
-            SELECT setup_id 
-            FROM analyst_recommendations_features
-            INTERSECT
-            SELECT setup_id 
-            FROM labels
-            WHERE outperformance_10d IS NOT NULL
-        )
-        SELECT setup_id 
-        FROM required_features
-        ORDER BY setup_id
-        """
-        
-        setup_ids = [row[0] for row in conn.execute(query).fetchall()]
-        conn.close()
-        
-        logger.info(f"Found {len(setup_ids)} setups for training")
-        return setup_ids
+        try:
+            # Find setups with complete data
+            query = """
+            SELECT s.setup_id
+            FROM setups s
+            JOIN labels l ON s.setup_id = l.setup_id
+            WHERE l.outperformance_10d IS NOT NULL
+            """
+            
+            setup_ids = [row[0] for row in conn.execute(query).fetchall()]
+            logger.info(f"Found {len(setup_ids)} setups with complete data")
+            
+            return setup_ids
+        except Exception as e:
+            logger.error(f"Error finding training setups: {e}")
+            return []
+        finally:
+            conn.close()
     
     def load_setup_list(self, filename: str) -> List[str]:
-        """Load a list of setup IDs from a file"""
-        if not os.path.exists(filename):
-            logger.warning(f"Setup list file {filename} not found")
+        """Load setup IDs from a file"""
+        try:
+            with open(filename, 'r') as f:
+                setup_ids = [line.strip() for line in f if line.strip()]
+            
+            logger.info(f"Loaded {len(setup_ids)} setup IDs from {filename}")
+            return setup_ids
+        except Exception as e:
+            logger.error(f"Error loading setup list: {e}")
             return []
-        
-        with open(filename, 'r') as f:
-            setup_ids = [line.strip() for line in f if line.strip()]
-        
-        logger.info(f"Loaded {len(setup_ids)} setups from {filename}")
-        return setup_ids
-    
+
     def extract_features(self, setup_ids: List[str], mode: str = "training", domains: List[str] = ['all']) -> Dict[str, Dict[str, Any]]:
         """
-        Extract features for the given setup IDs
+        Extract features for the specified setups
         
         Args:
             setup_ids: List of setup IDs to process
@@ -221,6 +210,104 @@ class EnhancedPipeline:
         
         return results
     
+    def _store_similarity_predictions(self, extraction_results: Dict[str, Dict[str, Any]], mode: str = "prediction") -> None:
+        """
+        Store similarity-based predictions in the similarity_predictions table
+        
+        Args:
+            extraction_results: Results from extract_features
+            mode: Either 'training' or 'prediction'
+        """
+        if mode != "prediction":
+            logger.info("Skipping similarity prediction storage in non-prediction mode")
+            return
+            
+        logger.info("💾 Storing similarity predictions...")
+        
+        try:
+            # Connect to database
+            conn = duckdb.connect(self.db_path)
+            
+            # Ensure table exists
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS similarity_predictions (
+                    setup_id VARCHAR,
+                    domain VARCHAR,
+                    predicted_outperformance DOUBLE,
+                    confidence DOUBLE,
+                    positive_ratio DOUBLE,
+                    negative_ratio DOUBLE,
+                    neutral_ratio DOUBLE,
+                    similar_cases_count INTEGER,
+                    prediction_timestamp VARCHAR,
+                    PRIMARY KEY (setup_id, domain)
+                )
+            """)
+            
+            # Extract predictions from each domain
+            rows = []
+            
+            for domain, setups in extraction_results.items():
+                for setup_id, result in setups.items():
+                    # Get prediction method based on domain
+                    if domain == 'news' and self.news_agent:
+                        content = result.synthetic_summary_financial_results if hasattr(result, 'synthetic_summary_financial_results') else ""
+                        if content:
+                            prediction = self.news_agent.predict_via_similarity(content)
+                    elif domain == 'fundamentals' and self.fundamentals_agent:
+                        content = f"ROA: {result.roa if hasattr(result, 'roa') else 'N/A'}, ROE: {result.roe if hasattr(result, 'roe') else 'N/A'}"
+                        prediction = self.fundamentals_agent.predict_via_similarity(content)
+                    elif domain == 'analyst' and self.analyst_agent:
+                        content = result.synthetic_summary if hasattr(result, 'synthetic_summary') else ""
+                        if content:
+                            prediction = self.analyst_agent.predict_via_similarity(content)
+                    elif domain == 'userposts' and self.userposts_agent:
+                        content = result.synthetic_summary if hasattr(result, 'synthetic_summary') else ""
+                        if content:
+                            prediction = self.userposts_agent.predict_via_similarity(content)
+                    else:
+                        continue
+                    
+                    # Create row if prediction exists
+                    if prediction:
+                        row = (
+                            setup_id,
+                            domain,
+                            prediction.get('predicted_outperformance', 0.0),
+                            prediction.get('confidence', 0.0),
+                            prediction.get('positive_ratio', 0.0),
+                            prediction.get('negative_ratio', 0.0),
+                            prediction.get('neutral_ratio', 0.0),
+                            prediction.get('similar_cases_count', 0),
+                            prediction.get('prediction_timestamp', datetime.now().isoformat())
+                        )
+                        rows.append(row)
+            
+            # Insert rows
+            if rows:
+                logger.info(f"Inserting {len(rows)} rows into similarity_predictions table")
+                conn.executemany("""
+                    INSERT OR REPLACE INTO similarity_predictions
+                    (setup_id, domain, predicted_outperformance, confidence, 
+                     positive_ratio, negative_ratio, neutral_ratio, 
+                     similar_cases_count, prediction_timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, rows)
+                
+                # Verify insertion
+                count = conn.execute("SELECT COUNT(*) FROM similarity_predictions").fetchone()[0]
+                logger.info(f"Verified {count} records in similarity_predictions table")
+            else:
+                logger.info("No valid similarity predictions to store")
+                
+            # Commit and close
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"Error storing similarity predictions: {e}")
+            # Continue without failing the pipeline
+    
     def create_ml_features(self, setup_ids: List[str], mode: str = 'training') -> Dict[str, Dict[str, int]]:
         """Create ML feature tables by merging domain features"""
         logger.info(f"\n🔄 Creating {mode} ML feature tables...")
@@ -253,7 +340,11 @@ class EnhancedPipeline:
         # Step 1: Extract features with appropriate mode
         extraction_results = self.extract_features(setup_ids, mode, domains)
         
-        # Step 2: Create ML feature tables
+        # Step 2: Store similarity predictions (in prediction mode)
+        if mode == "prediction":
+            self._store_similarity_predictions(extraction_results, mode)
+        
+        # Step 3: Create ML feature tables
         ml_features_results = self.create_ml_features(setup_ids, mode)
         
         # Generate summary
@@ -287,6 +378,8 @@ def main():
                        help='Path to LanceDB directory')
     parser.add_argument('--domains', nargs='+', choices=['all', 'news', 'fundamentals', 'analyst', 'userposts'], 
                        default=['all'], help='Domains to process (default: all)')
+    parser.add_argument('--similarity-only', action='store_true',
+                       help='Only extract similarity features and store predictions')
     
     args = parser.parse_args()
     
@@ -297,39 +390,70 @@ def main():
         lancedb_dir=args.lancedb_dir
     )
     
-    # Determine setup IDs to process
+    # Get setup IDs
     setup_ids = []
     
     if args.setup_ids:
-        # Use provided setup IDs
         setup_ids = args.setup_ids
-        logger.info(f"Using {len(setup_ids)} provided setup IDs")
+        logger.info(f"Using {len(setup_ids)} setup IDs from command line")
     elif args.setup_list:
-        # Load setup IDs from file
         setup_ids = pipeline.load_setup_list(args.setup_list)
-        logger.info(f"Loaded {len(setup_ids)} setup IDs from {args.setup_list}")
-    elif args.mode == 'training':
-        # For training mode, find setups with complete data
-        setup_ids = pipeline.find_training_setups()
-        logger.info(f"Found {len(setup_ids)} setups for training")
     else:
-        # For prediction mode, setup IDs are required
-        parser.error("Setup IDs are required for prediction mode. Use --setup-ids or --setup-list")
+        if args.mode == 'training':
+            setup_ids = pipeline.find_training_setups()
+        else:
+            logger.error("In prediction mode, you must provide setup IDs or a setup list file")
+            sys.exit(1)
     
     if not setup_ids:
         logger.error("No setup IDs to process")
-        return
+        sys.exit(1)
     
-    # Run the pipeline
-    results = pipeline.run_pipeline(setup_ids, args.mode, args.domains)
-    
-    # Print summary
-    logger.info("\n🎉 Pipeline Complete!")
-    logger.info(f"Mode: {args.mode}")
-    logger.info(f"Domains: {', '.join(args.domains)}")
-    logger.info(f"Duration: {results['duration_seconds']:.1f}s")
-    logger.info(f"Setups processed: {len(setup_ids)}")
-
+    # Run pipeline
+    if args.similarity_only:
+        logger.info("🔍 SIMILARITY-ONLY MODE: Only extracting similarity features and storing predictions")
+        # Initialize pipeline
+        pipeline._init_agents(args.mode)
+        
+        # Get existing features from database
+        conn = duckdb.connect(args.db_path)
+        results = {}
+        
+        for domain in args.domains if 'all' not in args.domains else ['news', 'fundamentals', 'analyst', 'userposts']:
+            domain_table = f"{domain}_features"
+            query = f"""
+            SELECT * FROM {domain_table}
+            WHERE setup_id IN (
+                SELECT UNNEST(?::VARCHAR[])
+            )
+            """
+            try:
+                df = conn.execute(query, [setup_ids]).df()
+                if not df.empty:
+                    results[domain] = {row.setup_id: row for _, row in df.iterrows()}
+                    logger.info(f"Loaded {len(df)} existing {domain} features")
+                else:
+                    logger.warning(f"No {domain} features found for the specified setup IDs")
+            except Exception as e:
+                logger.error(f"Error loading {domain} features: {e}")
+        
+        conn.close()
+        
+        # Store similarity predictions
+        pipeline._store_similarity_predictions(results, args.mode)
+        
+        logger.info("✅ Similarity predictions stored successfully")
+    else:
+        result = pipeline.run_pipeline(setup_ids, args.mode, args.domains)
+        
+        # Print summary
+        logger.info("\n" + "="*50)
+        logger.info("📊 PIPELINE SUMMARY")
+        logger.info("="*50)
+        logger.info(f"Mode: {args.mode}")
+        logger.info(f"Domains: {', '.join(args.domains)}")
+        logger.info(f"Setups processed: {result['setups_processed']}")
+        logger.info(f"Duration: {result['duration_seconds']:.2f} seconds")
 
 if __name__ == "__main__":
     main() 

@@ -42,6 +42,12 @@ from core.label_converter import LabelConverter, get_class_distribution
 # Import setup validator
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
 
+# Set environment variables for model caching
+os.environ['TRANSFORMERS_CACHE'] = 'models\cache'
+os.environ['HF_HOME'] = 'models\hub'
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = 'models\sentence_transformers'
+
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

@@ -18,6 +18,7 @@ from openai import OpenAI
 import lancedb
 from sentence_transformers import SentenceTransformer
 import time
+import os
 
 # Add project root to path for proper imports
 import sys
@@ -27,6 +28,12 @@ if str(project_root) not in sys.path:
 
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
 from core.label_converter import LabelConverter, get_class_distribution
+
+# Set environment variables for model caching
+os.environ['TRANSFORMERS_CACHE'] = 'models/cache'
+os.environ['HF_HOME'] = 'models/hub'
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = 'models/sentence_transformers'
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

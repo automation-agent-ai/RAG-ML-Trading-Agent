@@ -45,6 +45,12 @@ if str(project_root) not in sys.path:
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
 from embeddings.embed_news_duckdb import NewsEmbeddingPipelineDuckDB
 
+# Set environment variables for model caching
+os.environ['TRANSFORMERS_CACHE'] = 'models\cache'
+os.environ['HF_HOME'] = 'models\hub'
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = 'models\sentence_transformers'
+
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
