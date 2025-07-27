@@ -32,6 +32,7 @@ import numpy as np
 # Import from existing modules
 import sys
 from pathlib import Path
+import os
 
 # Add project root to path for proper imports
 project_root = Path(__file__).parent.parent.parent
@@ -361,11 +362,15 @@ class EnhancedNewsAgentDuckDB:
     def _connect_to_lancedb(self):
         """Connect to LanceDB"""
         try:
-            lancedb_path = Path(self.lancedb_dir)
+            # Use absolute path for LanceDB connection
+            abs_lancedb_dir = os.path.abspath(self.lancedb_dir)
+            logger.info(f"Connecting to LanceDB at absolute path: {abs_lancedb_dir}")
+            
+            lancedb_path = Path(abs_lancedb_dir)
             if not lancedb_path.exists():
                 raise FileNotFoundError(f"LanceDB directory not found: {lancedb_path}")
             
-            self.db = lancedb.connect(self.lancedb_dir)
+            self.db = lancedb.connect(abs_lancedb_dir)
             
             # In prediction mode, we don't need to open any tables
             if hasattr(self, 'mode') and self.mode == 'prediction':
@@ -385,20 +390,23 @@ class EnhancedNewsAgentDuckDB:
             self.training_table = None
             try:
                 if hasattr(self, 'db') and self.db:
+                    # List available tables
+                    tables = self.db.table_names()
+                    logger.info(f"Available tables: {tables}")
+                    
                     # Try to open with new table name first, then fall back to old name
-                    try:
+                    if "news_embeddings_training" in tables:
                         self.training_table = self.db.open_table("news_embeddings_training")
                         logger.info("Connected to news_embeddings_training table for similarity search")
-                    except Exception:
+                    elif "news_embeddings" in tables:
                         # Fall back to old table name for backward compatibility
-                        try:
-                            self.training_table = self.db.open_table("news_embeddings")
-                            logger.info("Connected to news_embeddings table for similarity search (legacy name)")
-                        except Exception as e:
-                            logger.warning(f"Could not open training embeddings table: {e}")
-                            # In prediction mode without training data, we can't do similarity search
-                            if hasattr(self, 'mode') and self.mode == 'prediction':
-                                logger.warning("No training embeddings available for similarity search in prediction mode")
+                        self.training_table = self.db.open_table("news_embeddings")
+                        logger.info("Connected to news_embeddings table for similarity search (legacy name)")
+                    else:
+                        logger.warning("No news embeddings table found in available tables")
+                        # In prediction mode without training data, we can't do similarity search
+                        if hasattr(self, 'mode') and self.mode == 'prediction':
+                            logger.warning("No training embeddings available for similarity search in prediction mode")
             except Exception as e:
                 logger.warning(f"Could not open training embeddings table: {e}")
         except Exception as e:
@@ -610,9 +618,38 @@ class EnhancedNewsAgentDuckDB:
         Returns:
             List of similar cases with their metadata and labels
         """
-        if self.training_table is None:
-            logger.warning("Training embeddings table not available")
-            return []
+        if not hasattr(self, 'training_table') or self.training_table is None:
+            logger.warning("Training embeddings table not available, attempting to connect")
+            # Try to open the table directly
+            try:
+                import lancedb
+                import os
+                
+                # Use absolute path
+                abs_lancedb_dir = os.path.abspath(self.lancedb_dir)
+                logger.info(f"Connecting to LanceDB at absolute path: {abs_lancedb_dir}")
+                db = lancedb.connect(abs_lancedb_dir)
+                
+                # List available tables
+                tables = db.table_names()
+                logger.info(f"Available tables: {tables}")
+                
+                # Try both table names
+                for table_name in ['news_embeddings_training', 'news_embeddings']:
+                    if table_name in tables:
+                        try:
+                            self.training_table = db.open_table(table_name)
+                            logger.info(f"Successfully opened {table_name} for similarity search")
+                            break
+                        except Exception as e:
+                            logger.warning(f"Could not open {table_name}: {e}")
+                
+                if self.training_table is None:
+                    logger.warning("No suitable training table found")
+                    return []
+            except Exception as e:
+                logger.error(f"Error connecting to LanceDB: {e}")
+                return []
         
         try:
             # Handle text input by creating embedding
@@ -626,6 +663,15 @@ class EnhancedNewsAgentDuckDB:
                 
             # Search for similar cases
             results = self.training_table.search(query_embedding).limit(limit).to_pandas()
+            logger.info(f"Found {len(results)} similar cases")
+            
+            # Check if results contain labels
+            if 'outperformance_10d' in results.columns:
+                avg_outperformance = results['outperformance_10d'].mean()
+                logger.info(f"Average outperformance of similar cases: {avg_outperformance}")
+            else:
+                logger.warning("Similar cases do not contain outperformance_10d labels")
+                
             return results.to_dict('records')
         except Exception as e:
             logger.error(f"Error searching similar embeddings: {e}")

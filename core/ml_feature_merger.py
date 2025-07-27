@@ -32,68 +32,147 @@ class MLFeatureMerger:
             db_to_use = self.prediction_db_path if mode == 'prediction' else self.db_path
             conn = duckdb.connect(db_to_use)
             
+            # Check if required tables exist
+            required_tables = ['news_features', 'userposts_features', 'analyst_recommendations_features']
+            existing_tables = []
+            missing_tables = []
+            
+            for table in required_tables:
+                table_exists = conn.execute(f"""
+                    SELECT count(*) FROM information_schema.tables 
+                    WHERE table_name = '{table}'
+                """).fetchone()[0]
+                
+                if table_exists:
+                    existing_tables.append(table)
+                else:
+                    missing_tables.append(table)
+            
+            if missing_tables:
+                logger.warning(f"Missing tables for text feature merging: {missing_tables}")
+                if not existing_tables:
+                    logger.error("No text feature tables available, skipping merge")
+                    return {
+                        "table_name": f"text_ml_features_{mode}",
+                        "feature_count": 0,
+                        "row_count": 0,
+                        "error": f"Missing tables: {missing_tables}"
+                    }
+            
+            # Modify the query based on available tables
+            from_clause_parts = []
+            join_clauses = []
+            
+            if 'news_features' in existing_tables:
+                from_clause_parts.append("news_features n")
+                
+                if 'userposts_features' in existing_tables:
+                    join_clauses.append("FULL OUTER JOIN userposts_features u ON n.setup_id = u.setup_id")
+                    
+                if 'analyst_recommendations_features' in existing_tables:
+                    if 'userposts_features' in existing_tables:
+                        join_clauses.append("FULL OUTER JOIN analyst_recommendations_features a ON COALESCE(n.setup_id, u.setup_id) = a.setup_id")
+                    else:
+                        join_clauses.append("FULL OUTER JOIN analyst_recommendations_features a ON n.setup_id = a.setup_id")
+            elif 'userposts_features' in existing_tables:
+                from_clause_parts.append("userposts_features u")
+                
+                if 'analyst_recommendations_features' in existing_tables:
+                    join_clauses.append("FULL OUTER JOIN analyst_recommendations_features a ON u.setup_id = a.setup_id")
+            elif 'analyst_recommendations_features' in existing_tables:
+                from_clause_parts.append("analyst_recommendations_features a")
+            
+            # If no tables exist, return early
+            if not from_clause_parts:
+                logger.error("No text feature tables available, skipping merge")
+                return {
+                    "table_name": f"text_ml_features_{mode}",
+                    "feature_count": 0,
+                    "row_count": 0,
+                    "error": f"Missing tables: {missing_tables}"
+                }
+            
+            # Build setup_id coalesce based on available tables
+            setup_id_parts = []
+            if 'news_features' in existing_tables:
+                setup_id_parts.append("n.setup_id")
+            if 'userposts_features' in existing_tables:
+                setup_id_parts.append("u.setup_id")
+            if 'analyst_recommendations_features' in existing_tables:
+                setup_id_parts.append("a.setup_id")
+            
+            setup_id_coalesce = "COALESCE(" + ", ".join(setup_id_parts) + ")"
+            
+            # Build feature columns based on available tables
+            feature_columns = [f"{setup_id_coalesce} as setup_id"]
+            
+            # News features
+            if 'news_features' in existing_tables:
+                feature_columns.extend([
+                    "n.count_financial_results",
+                    "n.max_severity_financial_results",
+                    "n.sentiment_score_financial_results",
+                    "n.profit_warning_present::INTEGER as profit_warning",
+                    "n.count_corporate_actions",
+                    "n.max_severity_corporate_actions",
+                    "n.sentiment_score_corporate_actions",
+                    "n.capital_raise_present::INTEGER as capital_raise",
+                    "n.count_governance",
+                    "n.max_severity_governance",
+                    "n.sentiment_score_governance",
+                    "n.board_change_present::INTEGER as board_change",
+                    "n.count_corporate_events",
+                    "n.max_severity_corporate_events",
+                    "n.sentiment_score_corporate_events",
+                    "n.contract_award_present::INTEGER as contract_award",
+                    "n.merger_or_acquisition_present::INTEGER as merger_acquisition",
+                    "n.count_other_signals",
+                    "n.max_severity_other_signals",
+                    "n.sentiment_score_other_signals",
+                    "n.broker_recommendation_present::INTEGER as broker_recommendation",
+                    "n.credit_rating_change_present::INTEGER as credit_rating_change"
+                ])
+            
+            # User Posts features
+            if 'userposts_features' in existing_tables:
+                feature_columns.extend([
+                    "u.avg_sentiment as posts_avg_sentiment",
+                    "u.post_count",
+                    "u.community_sentiment_score",
+                    "u.bull_bear_ratio",
+                    "u.rumor_intensity",
+                    "u.trusted_user_sentiment",
+                    "u.relevance_score as posts_relevance",
+                    "u.engagement_score",
+                    "u.unique_users",
+                    "CAST(u.contrarian_signal AS INTEGER) as contrarian_signal_numeric"
+                ])
+            
+            # Analyst features
+            if 'analyst_recommendations_features' in existing_tables:
+                feature_columns.extend([
+                    "a.recommendation_count",
+                    "a.buy_recommendations",
+                    "a.sell_recommendations",
+                    "a.hold_recommendations",
+                    "a.avg_price_target",
+                    "a.price_target_vs_current",
+                    "a.price_target_spread",
+                    "a.coverage_breadth",
+                    "a.consensus_rating",
+                    "a.recent_upgrades",
+                    "a.recent_downgrades",
+                    "a.analyst_conviction_score"
+                ])
+            
             # Build comprehensive text ML features query
-            text_features_query = """
+            text_features_query = f"""
             WITH base_features AS (
                 SELECT DISTINCT
-                    COALESCE(n.setup_id, u.setup_id, a.setup_id) as setup_id,
-                    
-                    -- News features
-                    n.count_financial_results,
-                    n.max_severity_financial_results,
-                    n.sentiment_score_financial_results,
-                    n.profit_warning_present::INTEGER as profit_warning,
-                    n.count_corporate_actions,
-                    n.max_severity_corporate_actions,
-                    n.sentiment_score_corporate_actions,
-                    n.capital_raise_present::INTEGER as capital_raise,
-                    n.count_governance,
-                    n.max_severity_governance,
-                    n.sentiment_score_governance,
-                    n.board_change_present::INTEGER as board_change,
-                    n.count_corporate_events,
-                    n.max_severity_corporate_events,
-                    n.sentiment_score_corporate_events,
-                    n.contract_award_present::INTEGER as contract_award,
-                    n.merger_or_acquisition_present::INTEGER as merger_acquisition,
-                    n.count_other_signals,
-                    n.max_severity_other_signals,
-                    n.sentiment_score_other_signals,
-                    n.broker_recommendation_present::INTEGER as broker_recommendation,
-                    n.credit_rating_change_present::INTEGER as credit_rating_change,
-                    
-                    -- User Posts features
-                    u.avg_sentiment as posts_avg_sentiment,
-                    u.post_count,
-                    u.community_sentiment_score,
-                    u.bull_bear_ratio,
-                    u.rumor_intensity,
-                    u.trusted_user_sentiment,
-                    u.relevance_score as posts_relevance,
-                    u.engagement_score,
-                    u.unique_users,
-                    CAST(u.contrarian_signal AS INTEGER) as contrarian_signal_numeric,
-                    
-                    -- Analyst features
-                    a.recommendation_count,
-                    a.buy_recommendations,
-                    a.sell_recommendations,
-                    a.hold_recommendations,
-                    a.avg_price_target,
-                    a.price_target_vs_current,
-                    a.price_target_spread,
-                    a.coverage_breadth,
-                    a.consensus_rating,
-                    a.recent_upgrades,
-                    a.recent_downgrades,
-                    a.analyst_conviction_score
-                    
-                FROM news_features n
-                FULL OUTER JOIN userposts_features u 
-                    ON n.setup_id = u.setup_id
-                FULL OUTER JOIN analyst_recommendations_features a 
-                    ON COALESCE(n.setup_id, u.setup_id) = a.setup_id
-                WHERE COALESCE(n.setup_id, u.setup_id, a.setup_id) = ANY(?)
+                    {", ".join(feature_columns)}
+                FROM {from_clause_parts[0]}
+                {" ".join(join_clauses)}
+                WHERE {setup_id_coalesce} = ANY(?)
             )
             SELECT 
                 f.*,
@@ -150,7 +229,64 @@ class MLFeatureMerger:
             db_to_use = self.prediction_db_path if mode == 'prediction' else self.db_path
             conn = duckdb.connect(db_to_use)
             
-            # Build comprehensive financial ML features query
+            # Check if required tables exist
+            required_tables = ['setups', 'fundamentals', 'financial_ratios', 'company_info', 'fundamentals_features']
+            existing_tables = []
+            missing_tables = []
+            
+            for table in required_tables:
+                table_exists = conn.execute(f"""
+                    SELECT count(*) FROM information_schema.tables 
+                    WHERE table_name = '{table}'
+                """).fetchone()[0]
+                
+                if table_exists:
+                    existing_tables.append(table)
+                else:
+                    missing_tables.append(table)
+            
+            if 'setups' not in existing_tables:
+                logger.error("Required 'setups' table is missing, cannot merge financial features")
+                return {
+                    "table_name": f"financial_ml_features_{mode}",
+                    "feature_count": 0,
+                    "row_count": 0,
+                    "error": f"Missing required 'setups' table"
+                }
+                
+            # Create a simplified query if some tables are missing
+            if missing_tables:
+                logger.warning(f"Missing tables for financial feature merging: {missing_tables}")
+                
+                # Create a simple query with just the setup_ids
+                simple_query = f"""
+                SELECT 
+                    s.setup_id
+                FROM setups s
+                WHERE s.setup_id = ANY(?)
+                """
+                
+                # Create or replace the table
+                table_name = f"financial_ml_features_{mode}"
+                conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                conn.execute(f"CREATE TABLE {table_name} AS {simple_query}", [setup_ids])
+                
+                # Get table info
+                row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                
+                logger.info(f"✅ Created simplified financial ML features table due to missing tables:")
+                logger.info(f"- Table: {table_name}")
+                logger.info(f"- Features: 1 (setup_id only)")
+                logger.info(f"- Rows: {row_count}")
+                
+                return {
+                    "table_name": table_name,
+                    "feature_count": 1,
+                    "row_count": row_count,
+                    "warning": f"Simplified table created due to missing tables: {missing_tables}"
+                }
+            
+            # If all tables exist, proceed with the full query
             financial_features_query = """
             WITH 
             -- Get latest fundamentals data for each setup

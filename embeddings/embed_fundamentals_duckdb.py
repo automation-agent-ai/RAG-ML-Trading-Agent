@@ -70,11 +70,13 @@ class FundamentalsEmbedderDuckDB(BaseEmbedder):
         fundamentals_query = '''
             SELECT 
                 f.*,
+                ff.setup_id,
                 s.spike_timestamp as setup_date
             FROM fundamentals f
-            JOIN setups s ON f.ticker = s.yahoo_ticker AND f.setup_id = s.setup_id
-            WHERE s.setup_id IN ({})
-            ORDER BY s.setup_id
+            JOIN setups s ON f.ticker = s.lse_ticker
+            JOIN fundamentals_features ff ON ff.setup_id = s.setup_id
+            WHERE ff.setup_id IN ({})
+            ORDER BY ff.setup_id
         '''.format(','.join([f"'{sid}'" for sid in self.setup_validator.confirmed_setup_ids]))
         
         self.fundamentals_data = self.setup_validator.conn.execute(fundamentals_query).df()
@@ -86,9 +88,14 @@ class FundamentalsEmbedderDuckDB(BaseEmbedder):
             logger.warning("No fundamentals data to merge")
             return pd.DataFrame()
             
-        # For now, just return the fundamentals data
-        # In a real implementation, you might merge with other financial tables
-        return self.fundamentals_data
+        # Set setup_id as index for easier access
+        if 'setup_id' in self.fundamentals_data.columns:
+            merged_df = self.fundamentals_data.set_index('setup_id')
+        else:
+            logger.warning("No setup_id column found in fundamentals data")
+            return pd.DataFrame()
+            
+        return merged_df
         
     def create_financial_summary(self, row: pd.Series) -> str:
         """Create a comprehensive text summary of financial data"""

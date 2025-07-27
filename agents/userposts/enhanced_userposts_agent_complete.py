@@ -154,7 +154,10 @@ class EnhancedUserPostsAgentComplete:
     def _connect_to_lancedb(self):
         """Connect to LanceDB table"""
         try:
-            db = lancedb.connect(self.lancedb_dir)
+            # Use absolute path for LanceDB connection
+            abs_lancedb_dir = os.path.abspath(self.lancedb_dir)
+            logger.info(f"Connecting to LanceDB at absolute path: {abs_lancedb_dir}")
+            db = lancedb.connect(abs_lancedb_dir)
             
             # In prediction mode, we don't need to open any tables
             if hasattr(self, 'mode') and self.mode == 'prediction':
@@ -174,17 +177,23 @@ class EnhancedUserPostsAgentComplete:
             # Initialize training table for similarity search
             self.training_table = None
             try:
+                # List available tables
+                tables = db.table_names()
+                logger.info(f"Available tables: {tables}")
+                
                 # Try to open with new table name first, then fall back to old name
                 try:
-                    self.training_table = db.open_table("userposts_embeddings_training")
-                    logger.info("Connected to userposts_embeddings_training table for similarity search")
-                except Exception:
-                    # Fall back to old table name for backward compatibility
-                    try:
+                    if "userposts_embeddings_training" in tables:
+                        self.training_table = db.open_table("userposts_embeddings_training")
+                        logger.info("Connected to userposts_embeddings_training table for similarity search")
+                    elif "userposts_embeddings" in tables:
+                        # Fall back to old table name for backward compatibility
                         self.training_table = db.open_table("userposts_embeddings")
                         logger.info("Connected to userposts_embeddings table for similarity search (legacy name)")
-                    except Exception as e:
-                        logger.warning(f"Could not open training embeddings table: {e}")
+                    else:
+                        logger.warning("No userposts embeddings table found in available tables")
+                except Exception as e:
+                    logger.warning(f"Could not open training embeddings table: {e}")
             except Exception as e:
                 logger.warning(f"Could not open training embeddings table: {e}")
         except Exception as e:
@@ -728,7 +737,7 @@ Return ONLY the JSON object."""
             List of similar cases with their metadata and labels
         """
         if not hasattr(self, 'training_table') or self.training_table is None:
-            logger.warning("Training embeddings table not available")
+            logger.warning("Training embeddings table not available, attempting to connect")
             # Try to open the table directly
             try:
                 import lancedb

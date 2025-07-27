@@ -88,11 +88,11 @@ class NewsEmbeddingPipelineDuckDB(BaseEmbedder):
             SELECT 
                 r.*,
                 s.spike_timestamp as setup_date
-            FROM rns r
+            FROM rns_announcements r
             JOIN setups s ON r.ticker = s.lse_ticker AND r.setup_id = s.setup_id
             WHERE s.setup_id IN ({})
                 AND r.headline IS NOT NULL
-                AND r.content IS NOT NULL
+                AND r.text IS NOT NULL
             ORDER BY s.setup_id
         '''.format(','.join([f"'{sid}'" for sid in self.setup_validator.confirmed_setup_ids]))
         
@@ -104,11 +104,11 @@ class NewsEmbeddingPipelineDuckDB(BaseEmbedder):
             SELECT 
                 n.*,
                 s.spike_timestamp as setup_date
-            FROM enhanced_news n
+            FROM stock_news_enhanced n
             JOIN setups s ON n.ticker = s.yahoo_ticker AND n.setup_id = s.setup_id
             WHERE s.setup_id IN ({})
-                AND n.headline IS NOT NULL
-                AND n.content IS NOT NULL
+                AND n.title IS NOT NULL
+                AND n.content_summary IS NOT NULL
             ORDER BY s.setup_id
         '''.format(','.join([f"'{sid}'" for sid in self.setup_validator.confirmed_setup_ids]))
         
@@ -127,7 +127,7 @@ class NewsEmbeddingPipelineDuckDB(BaseEmbedder):
         
         for _, row in self.rns_data.iterrows():
             # Get content and headline
-            content = row.get('content', '')
+            content = row.get('text', '')
             headline = row.get('headline', '')
             
             if not content or not headline:
@@ -144,9 +144,8 @@ class NewsEmbeddingPipelineDuckDB(BaseEmbedder):
                 'headline': headline,
                 'chunk_text': full_text,  # No chunking for RNS
                 'text_length': len(full_text),
-                'rns_date': str(row.get('date', '')),
-                'rns_time': str(row.get('time', '')),
-                'rns_category': row.get('category', ''),
+                'rns_date': str(row.get('rns_date', '')),
+                'rns_time': str(row.get('rns_time', '')),
                 'embedded_at': datetime.now().isoformat()
             }
             
@@ -167,8 +166,8 @@ class NewsEmbeddingPipelineDuckDB(BaseEmbedder):
         
         for _, row in self.news_data.iterrows():
             # Get content and headline
-            content = row.get('content', '')
-            headline = row.get('headline', '')
+            content = row.get('content_summary', '')
+            headline = row.get('title', '')
             
             if not content or not headline:
                 continue
@@ -184,9 +183,9 @@ class NewsEmbeddingPipelineDuckDB(BaseEmbedder):
                 'headline': headline,
                 'chunk_text': full_text,  # No chunking for enhanced news
                 'text_length': len(full_text),
-                'news_date': str(row.get('date', '')),
-                'news_source': row.get('source', ''),
-                'news_url': row.get('url', ''),
+                'news_date': str(row.get('provider_publish_time', '')),
+                'news_source': row.get('publisher', ''),
+                'news_url': row.get('link', ''),
                 'embedded_at': datetime.now().isoformat()
             }
             

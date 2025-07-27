@@ -31,7 +31,7 @@ class CompletePipeline:
     def __init__(
         self,
         db_path: str = "data/sentiment_system.duckdb",
-        lancedb_dir: str = "data/lancedb_store",
+        lancedb_dir: str = "lancedb_store",
         prediction_db_path: str = "data/prediction_features.duckdb"
     ):
         self.db_path = db_path
@@ -405,7 +405,7 @@ def main():
                        help='Path to DuckDB database')
     parser.add_argument('--prediction-db-path', default='data/prediction_features.duckdb',
                        help='Path to store prediction features')
-    parser.add_argument('--lancedb-dir', default='storage/lancedb_store',
+    parser.add_argument('--lancedb-dir', default='lancedb_store',
                        help='Path to LanceDB directory')
     parser.add_argument('--step', choices=['all', 'embeddings', 'features', 'ml_tables'], default='all',
                        help='Pipeline step to run (default: all)')
