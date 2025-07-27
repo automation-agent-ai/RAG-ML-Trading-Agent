@@ -10,32 +10,30 @@ Table Schema: id, ticker, period, strong_buy, buy, hold, sell, strong_sell, mean
 
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import logging
 import sys
-import re
-
-import lancedb
-from sentence_transformers import SentenceTransformer
 
 # Add project root to path for proper imports
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+from embeddings.base_embedder import BaseEmbedder
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class AnalystRecommendationsEmbedderDuckDB:
+class AnalystRecommendationsEmbedderDuckDB(BaseEmbedder):
     """DuckDB-based Analyst Recommendations Domain Embedding Pipeline"""
     
     def __init__(self, db_path: str = "data/sentiment_system.duckdb", 
                  lancedb_dir: str = "lancedb_store",
+                 embedding_model: str = "all-MiniLM-L6-v2",
                  include_labels: bool = True,
                  mode: str = "training"):
         """
@@ -44,32 +42,32 @@ class AnalystRecommendationsEmbedderDuckDB:
         Args:
             db_path: Path to DuckDB database
             lancedb_dir: Directory for LanceDB storage
+            embedding_model: Model name for sentence transformer
             include_labels: Whether to include performance labels in embeddings
             mode: Either 'training' or 'prediction'
         """
-        self.db_path = Path(db_path)
-        self.lancedb_dir = Path(lancedb_dir)
-        self.include_labels = include_labels
-        self.mode = mode
-        
-        # Initialize setup validator
-        self.setup_validator = SetupValidatorDuckDB(db_path=str(self.db_path))
-        logger.info(f"Setup validator initialized with {len(self.setup_validator.confirmed_setup_ids)} confirmed setups")
-        
-        # Initialize models
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        
-        # Initialize LanceDB
-        self.lancedb_dir.mkdir(exist_ok=True)
-        self.db = lancedb.connect(str(self.lancedb_dir))
+        # Initialize base class
+        super().__init__(
+            db_path=db_path,
+            lancedb_dir=lancedb_dir,
+            embedding_model=embedding_model,
+            include_labels=include_labels,
+            mode=mode
+        )
         
         # Data containers
         self.analyst_data = None
-        self.labels_data = None
+        
+    def get_text_field_name(self) -> str:
+        """Get the name of the text field to embed"""
+        return "analyst_summary"
         
     def load_data(self):
         """Load analyst recommendations and labels data from DuckDB"""
-        logger.info("Loading analyst recommendations data from DuckDB...")
+        self.logger.info("Loading analyst recommendations data from DuckDB...")
+        
+        # Load labels for confirmed setups
+        super().load_labels()
         
         # Get all analyst recommendations for confirmed setups
         # Handle ticker format variations: try both plain and .L suffix matching
@@ -90,11 +88,7 @@ class AnalystRecommendationsEmbedderDuckDB:
         '''.format(','.join([f"'{sid}'" for sid in self.setup_validator.confirmed_setup_ids]))
         
         self.analyst_data = self.setup_validator.conn.execute(analyst_query).df()
-        logger.info(f"Loaded {len(self.analyst_data)} analyst recommendations")
-        
-        # Load labels for confirmed setups
-        self.labels_data = self.setup_validator.get_labels_for_confirmed_setups()
-        logger.info(f"Loaded {len(self.labels_data)} confirmed setup labels")
+        self.logger.info(f"Loaded {len(self.analyst_data)} analyst recommendations")
         
     def create_analyst_summary(self, row: pd.Series) -> str:
         """Create a comprehensive text summary for an analyst recommendation"""
@@ -150,9 +144,14 @@ class AnalystRecommendationsEmbedderDuckDB:
         
         return " | ".join(parts) if parts else f"Analyst data for {row.get('ticker', 'Unknown')}"
         
-    def create_embeddings_with_labels(self):
-        """Create embeddings with optional labels based on mode"""
-        embeddings_data = []
+    def create_embeddings_dataset(self) -> List[Dict[str, Any]]:
+        """Create embeddings dataset from analyst recommendations"""
+        if self.analyst_data is None or self.analyst_data.empty:
+            self.logger.warning("No analyst recommendations data to process")
+            return []
+        
+        self.logger.info("Creating embeddings dataset...")
+        records = []
         
         for idx, row in self.analyst_data.iterrows():
             # Create comprehensive text summary
@@ -161,16 +160,12 @@ class AnalystRecommendationsEmbedderDuckDB:
             # Create unique ID
             record_id = f"analyst_{row.get('ticker', 'unknown')}_{row.get('setup_id', 'unknown')}"
             
-            # Generate embedding
-            embedding = self.model.encode(analyst_summary)
-            
-            # Base record without labels
+            # Base record without embedding (will be added by create_embeddings)
             record = {
                 'id': record_id,
                 'setup_id': row['setup_id'],
                 'ticker': row.get('ticker', ''),
                 'analyst_summary': analyst_summary,
-                'vector': embedding.tolist(),
                 'embedded_at': datetime.now().isoformat(),
                 'strong_buy': row.get('strong_buy', 0) or 0,
                 'buy': row.get('buy', 0) or 0,
@@ -181,101 +176,70 @@ class AnalystRecommendationsEmbedderDuckDB:
                 'mean_recommendation': float(row.get('mean_recommendation', 0)) if pd.notna(row.get('mean_recommendation')) else 0
             }
             
-            # Add performance labels only if in training mode
-            if self.include_labels and self.mode == "training":
-                setup_id = row['setup_id']
-                setup_labels = self.labels_data[self.labels_data['setup_id'] == setup_id]
-                
-                if not setup_labels.empty:
-                    latest_label = setup_labels.iloc[-1]
-                    record.update({
-                        'stock_return_10d': float(latest_label.get('stock_return_10d', 0)),
-                        'outperformance_10d': float(latest_label.get('outperformance_10d', 0)),
-                        'days_outperformed_10d': int(latest_label.get('days_outperformed_10d', 0)),
-                        'benchmark_return_10d': float(latest_label.get('benchmark_return_10d', 0)),
-                        'has_performance_labels': True
-                    })
-                else:
-                    record.update({
-                        'stock_return_10d': 0.0,
-                        'outperformance_10d': 0.0,
-                        'days_outperformed_10d': 0,
-                        'benchmark_return_10d': 0.0,
-                        'has_performance_labels': False
-                    })
-            else:
-                # In prediction mode, don't include labels
-                record.update({
-                    'stock_return_10d': 0.0,
-                    'outperformance_10d': 0.0,
-                    'days_outperformed_10d': 0,
-                    'benchmark_return_10d': 0.0,
-                    'has_performance_labels': False
-                })
-            
-            embeddings_data.append(record)
+            records.append(record)
         
-        logger.info(f"Created {len(embeddings_data)} analyst recommendation embeddings")
-        return embeddings_data
+        self.logger.info(f"Created {len(records)} analyst recommendation records")
+        return records
 
-    def store_embeddings(self, embeddings_data, table_name=None):
-        """Store embeddings in LanceDB with mode-specific table names"""
-        if not embeddings_data:
-            logger.warning("No embeddings to store")
-            return
-        
-        if table_name is None:
-            table_name = "analyst_embeddings_training" if self.mode == "training" else "analyst_embeddings_prediction"
-        
-        logger.info(f"Storing {len(embeddings_data)} embeddings in table: {table_name}")
-        
-        # Only store in LanceDB if in training mode or explicitly requested
-        if self.mode != "training" and not table_name.endswith("_prediction"):
-            logger.info("Skipping LanceDB storage in prediction mode")
-            return
-
-        # Drop existing table if it exists
-        try:
-            self.db.drop_table(table_name)
-            logger.info(f"Dropped existing table: {table_name}")
-        except Exception:
-            pass
-            
-        # Create DataFrame
-        df = pd.DataFrame(embeddings_data)
-        df['vector'] = df['vector'].apply(lambda x: np.array(x, dtype=np.float32))
-        
-        # Handle data types
-        for col in df.columns:
-            if df[col].dtype == 'object' and col != 'vector':
-                df[col] = df[col].astype(str).replace('nan', '')
-                
-        # Create table
-        table = self.db.create_table(table_name, df)
-        logger.info(f"Created LanceDB table '{table_name}' with {len(table)} records")
-        
-        # Verify the table
-        if len(embeddings_data) > 0:
-            sample_query = table.search(embeddings_data[0]['vector']).limit(3).to_pandas()
-            logger.info(f"Table verification: Retrieved {len(sample_query)} sample records")
-        
     def run_pipeline(self):
         """Execute the complete analyst recommendations embedding pipeline"""
-        logger.info("Starting DuckDB-based Analyst Recommendations Embedding Pipeline")
+        self.logger.info("Starting DuckDB-based Analyst Recommendations Embedding Pipeline")
         
+        # Load data
         self.load_data()
-        embeddings_data = self.create_embeddings_with_labels()
-        self.store_embeddings(embeddings_data)
         
-        # Summary
-        logger.info("Pipeline Summary:")
-        logger.info(f"  Total records: {len(embeddings_data)}")
-        logger.info(f"  With performance labels: {len([r for r in embeddings_data if r.get('has_performance_labels')])}")
-        logger.info(f"  Unique setups: {len(set(r['setup_id'] for r in embeddings_data))}")
-        logger.info(f"  Unique tickers: {len(set(r['ticker'] for r in embeddings_data))}")
+        # Create embeddings dataset
+        records = self.create_embeddings_dataset()
+        
+        # Enrich with labels (only in training mode)
+        enriched_records = self.enrich_with_labels(records)
+        
+        # Create embeddings
+        final_records = self.create_embeddings(enriched_records)
+        
+        # Store in LanceDB (only in training mode)
+        self.store_in_lancedb(final_records, "analyst_embeddings")
+        
+        # Display summary
+        self.display_summary(final_records)
         
         # Close DuckDB connection
-        self.setup_validator.close()
+        self.cleanup()
+    
+    def process_setups(self, setup_ids: List[str]) -> bool:
+        """Process specific setup IDs"""
+        self.logger.info(f"Processing analyst recommendations embeddings for {len(setup_ids)} setups")
+        
+        # Override confirmed setup IDs
+        self.setup_validator.confirmed_setup_ids = set(setup_ids)
+        
+        try:
+            self.run_pipeline()
+            return True
+        except Exception as e:
+            self.logger.error(f"Error processing setups: {e}")
+            return False
+    
+    def display_summary(self, records: List[Dict[str, Any]]) -> None:
+        """Display pipeline summary statistics"""
+        if not records:
+            self.logger.info("No records processed")
+            return
+        
+        self.logger.info("\n" + "="*50)
+        self.logger.info("ANALYST RECOMMENDATIONS EMBEDDING PIPELINE SUMMARY")
+        self.logger.info("="*50)
+        
+        # Basic stats
+        self.logger.info(f"Total records processed: {len(records)}")
+        self.logger.info(f"Unique setups: {len(set(r['setup_id'] for r in records))}")
+        self.logger.info(f"Unique tickers: {len(set(r['ticker'] for r in records))}")
+        
+        # Label stats
+        labeled_records = [r for r in records if r.get('has_performance_labels', False)]
+        self.logger.info(f"Records with performance labels: {len(labeled_records)}")
+        
+        self.logger.info("="*50)
 
 
 def main():

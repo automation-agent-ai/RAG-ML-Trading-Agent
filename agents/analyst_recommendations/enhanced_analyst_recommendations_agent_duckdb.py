@@ -12,7 +12,7 @@ import numpy as np
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 from pathlib import Path
 from openai import OpenAI
 import lancedb
@@ -46,12 +46,14 @@ class EnhancedAnalystRecommendationsAgentDuckDB:
         db_path: str = "../data/sentiment_system.duckdb",
         lancedb_dir: str = "../lancedb_store", 
         table_name: str = "analyst_recommendations_embeddings",
-        llm_model: str = "gpt-4o-mini"
+        llm_model: str = "gpt-4o-mini",
+        mode: str = "training"  # Either "training" or "prediction"
     ):
         self.db_path = db_path
         self.lancedb_dir = lancedb_dir
         self.table_name = table_name
         self.llm_model = llm_model
+        self.mode = mode
         
         # Initialize setup validator
         self.setup_validator = SetupValidatorDuckDB(db_path)
@@ -65,22 +67,54 @@ class EnhancedAnalystRecommendationsAgentDuckDB:
         # Initialize DuckDB feature storage
         self._init_duckdb_feature_storage()
         
-        logger.info("Enhanced Analyst Recommendations Agent (DuckDB) initialized successfully")
+        logger.info(f"Enhanced Analyst Recommendations Agent (DuckDB) initialized successfully in {mode} mode")
     
     def _connect_to_lancedb(self):
         """Connect to LanceDB table"""
         try:
             db = lancedb.connect(self.lancedb_dir)
+            
+            # In prediction mode, we don't need to open any tables
+            if hasattr(self, 'mode') and self.mode == 'prediction':
+                logger.info("Prediction mode: Skipping table opening")
+                self.table = None
+                self.training_table = None
+                return
+                
             # Try to open existing table or note that it needs to be created
             try:
                 self.table = db.open_table(self.table_name)
                 logger.info(f"Connected to existing LanceDB table: {self.table_name}")
-            except:
+            except Exception as e:
                 logger.info(f"LanceDB table {self.table_name} will be created during embedding process")
                 self.table = None
+                
+            # Initialize training table for similarity search
+            self.training_table = None
+            try:
+                # Try to open with new table name first, then fall back to old name
+                try:
+                    self.training_table = db.open_table("analyst_recommendations_embeddings_training")
+                    logger.info("Connected to analyst_recommendations_embeddings_training table for similarity search")
+                except Exception:
+                    # Fall back to old table name for backward compatibility
+                    try:
+                        self.training_table = db.open_table("analyst_recommendations_embeddings")
+                        logger.info("Connected to analyst_recommendations_embeddings table for similarity search (legacy name)")
+                    except Exception as e:
+                        logger.warning(f"Could not open training embeddings table: {e}")
+            except Exception as e:
+                logger.warning(f"Could not open training embeddings table: {e}")
         except Exception as e:
             logger.error(f"Error connecting to LanceDB: {e}")
-            raise
+            # In prediction mode, we can continue without LanceDB
+            if hasattr(self, 'mode') and self.mode == 'prediction':
+                logger.warning("Continuing in prediction mode without LanceDB connection")
+                self.db = None
+                self.table = None
+                self.training_table = None
+            else:
+                raise
     
     def _init_duckdb_feature_storage(self):
         """Initialize DuckDB tables for analyst recommendations feature storage"""
@@ -368,29 +402,76 @@ Return JSON format:
             'cot_explanation_analyst': 'LLM extraction failed'
         }
     
-    def process_setup(self, setup_id: str) -> Dict[str, Any]:
-        """Process a single setup for analyst recommendations features"""
+    def process_setup(self, setup_id: str, mode: str = None) -> Dict[str, Any]:
+        """
+        Process a single setup ID to extract and store features
         
-        logger.info(f"Processing analyst recommendations for setup: {setup_id}")
+        Args:
+            setup_id: Setup ID to process
+            mode: Either 'training' or 'prediction' (overrides self.mode if provided)
+            
+        Returns:
+            Extracted features or None if processing failed
+        """
+        # Use provided mode or fall back to instance mode
+        current_mode = mode if mode is not None else self.mode
+        logger.info(f"Processing analyst recommendations for setup: {setup_id} in {current_mode} mode")
         
-        # Get analyst recommendations data
-        recommendations_df = self.get_analyst_recommendations_for_setup(setup_id)
-        
-        # Extract structured metrics
-        structured_metrics = self.extract_structured_metrics(setup_id, recommendations_df)
-        
-        # Extract LLM features
-        llm_features = self.extract_llm_features(setup_id, recommendations_df)
-        
-        # Combine all features
-        all_features = {
-            **structured_metrics,
-            **llm_features,
-            'extraction_timestamp': datetime.now(),
-            'llm_model': self.llm_model
-        }
-        
-        return all_features
+        try:
+            # Step 1: Retrieve analyst recommendations data
+            recommendations_df = self.get_analyst_recommendations_for_setup(setup_id)
+            
+            if len(recommendations_df) == 0:
+                logger.warning(f"No analyst recommendations found for setup {setup_id}")
+                features = self._get_default_llm_features()
+                features['setup_id'] = setup_id
+                features['extraction_timestamp'] = datetime.now().isoformat()
+                features['llm_model'] = self.llm_model
+                self.store_features(setup_id, features)
+                return features
+            
+            # Step 2: Extract structured metrics
+            structured_metrics = self.extract_structured_metrics(setup_id, recommendations_df)
+            
+            # Step 3: Extract LLM features
+            llm_features = self.extract_llm_features(setup_id, recommendations_df)
+            
+            # Step 4: Combine all features
+            features = {**structured_metrics, **llm_features}
+            features['setup_id'] = setup_id
+            features['extraction_timestamp'] = datetime.now().isoformat()
+            features['llm_model'] = self.llm_model
+            
+            # Step 5: Store features
+            self.store_features(setup_id, features)
+            
+            # Step 6: In prediction mode, generate similarity-based predictions
+            if current_mode == 'prediction' and hasattr(self, 'training_table') and self.training_table is not None:
+                # Create content for similarity search
+                analyst_summary = f"Analyst recommendations: {features.get('buy_recommendations', 0)} Buy, " + \
+                                 f"{features.get('hold_recommendations', 0)} Hold, " + \
+                                 f"{features.get('sell_recommendations', 0)} Sell | " + \
+                                 f"Price target: {features.get('avg_price_target', 0)} | " + \
+                                 f"Consensus: {features.get('consensus_rating', 3.0)}"
+                
+                if features.get('synthetic_analyst_summary'):
+                    analyst_summary += f" | {features['synthetic_analyst_summary']}"
+                
+                # Generate prediction
+                if hasattr(self, 'predict_via_similarity'):
+                    prediction = self.predict_via_similarity(analyst_summary)
+                    if prediction:
+                        prediction['setup_id'] = setup_id
+                        prediction['domain'] = 'analyst'
+                        prediction['prediction_timestamp'] = datetime.now().isoformat()
+                        logger.info(f"Generated similarity prediction for {setup_id}: {prediction.get('predicted_outperformance', 'N/A')}")
+                        return features, prediction
+            
+            return features
+            
+        except Exception as e:
+            logger.error(f"Error processing analyst recommendations for setup {setup_id}: {e}")
+            return None
     
     def store_features(self, setup_id: str, features: Dict[str, Any]) -> bool:
         """Store extracted features in DuckDB"""
@@ -541,6 +622,134 @@ Return JSON format:
             logger.info(f"✅ Skipped {skipped_count} already-processed setups")
         
         return results
+
+    def find_similar_training_embeddings(self, query: Union[np.ndarray, str], limit: int = 10) -> List[Dict]:
+        """
+        Find similar training embeddings with labels
+        
+        Args:
+            query: Either a numpy array embedding or text content to embed
+            limit: Maximum number of similar cases to return
+            
+        Returns:
+            List of similar cases with their metadata and labels
+        """
+        if not hasattr(self, 'training_table') or self.training_table is None:
+            logger.warning("Training embeddings table not available")
+            return []
+        
+        try:
+            # Handle text input by creating embedding
+            if isinstance(query, str):
+                from sentence_transformers import SentenceTransformer
+                model = SentenceTransformer('all-MiniLM-L6-v2')
+                query = model.encode(query)
+            
+            # Ensure numpy array
+            if not isinstance(query, np.ndarray):
+                query = np.array(query)
+                
+            # Search for similar cases
+            results = self.training_table.search(query).limit(limit).to_pandas()
+            return results.to_dict('records')
+        except Exception as e:
+            logger.error(f"Error searching similar embeddings: {e}")
+            return []
+    
+    def compute_similarity_features(self, similar_cases: List[Dict]) -> Dict[str, float]:
+        """
+        Compute similarity-based features from similar cases
+        
+        Args:
+            similar_cases: List of similar cases with their metadata and labels
+            
+        Returns:
+            Dictionary of similarity-based features
+        """
+        if not similar_cases:
+            return {
+                'positive_signal_strength': 0.0,
+                'negative_risk_score': 0.0,
+                'neutral_probability': 0.0,
+                'historical_pattern_confidence': 0.0,
+                'similar_cases_count': 0
+            }
+        
+        # Calculate performance-based features
+        positive_cases = [c for c in similar_cases if c.get('outperformance_10d', 0) > 0.02]  # 2% threshold
+        negative_cases = [c for c in similar_cases if c.get('outperformance_10d', 0) < -0.02]
+        neutral_cases = [c for c in similar_cases if abs(c.get('outperformance_10d', 0)) <= 0.02]
+        
+        total_cases = len(similar_cases)
+        
+        # Calculate weighted features based on similarity scores
+        similarity_scores = [c.get('_distance', 1.0) for c in similar_cases]  # Lower distance = higher similarity
+        max_distance = max(similarity_scores) if similarity_scores else 1.0
+        similarity_weights = [1 - (score / max_distance) for score in similarity_scores]
+        
+        # Calculate weighted ratios (with safety check)
+        sum_weights = sum(similarity_weights) if similarity_weights else 1.0
+        if sum_weights == 0:
+            sum_weights = 1.0
+            
+        positive_ratio = sum(w for c, w in zip(similar_cases, similarity_weights) 
+                           if c.get('outperformance_10d', 0) > 0.02) / sum_weights
+        
+        negative_ratio = sum(w for c, w in zip(similar_cases, similarity_weights)
+                           if c.get('outperformance_10d', 0) < -0.02) / sum_weights
+        
+        # Calculate pattern confidence based on consistency
+        performance_values = [c.get('outperformance_10d', 0) for c in similar_cases]
+        performance_std = np.std(performance_values) if performance_values else 1.0
+        pattern_confidence = 1.0 / (1.0 + performance_std)  # Higher std = lower confidence
+        
+        return {
+            'positive_signal_strength': float(positive_ratio),
+            'negative_risk_score': float(negative_ratio),
+            'neutral_probability': float(len(neutral_cases) / total_cases),
+            'historical_pattern_confidence': float(pattern_confidence),
+            'similar_cases_count': total_cases
+        }
+    
+    def predict_via_similarity(self, query: Union[np.ndarray, str]) -> Dict[str, Any]:
+        """
+        Direct prediction using similarity to training embeddings
+        
+        Args:
+            query: Either a numpy array embedding or text content to embed
+            
+        Returns:
+            Dictionary with prediction results
+        """
+        # Find similar cases
+        similar_cases = self.find_similar_training_embeddings(query, limit=10)
+        
+        if not similar_cases:
+            logger.warning("No similar cases found for prediction")
+            return {}
+            
+        # Extract labels from similar cases
+        similar_labels = [case.get('outperformance_10d', 0.0) for case in similar_cases]
+        
+        # Compute weighted average prediction
+        similarity_scores = [1 - case.get('_distance', 1.0) for case in similar_cases]
+        sum_scores = sum(similarity_scores) if similarity_scores else 1.0
+        if sum_scores == 0:
+            sum_scores = 1.0
+            
+        weighted_prediction = sum(label * score for label, score in zip(similar_labels, similarity_scores)) / sum_scores
+        
+        # Compute confidence metrics
+        prediction = {
+            'predicted_outperformance': float(weighted_prediction),
+            'confidence': float(1.0 / (1.0 + np.std(similar_labels))),
+            'positive_ratio': sum(1 for l in similar_labels if l > 0.02) / len(similar_labels),
+            'negative_ratio': sum(1 for l in similar_labels if l < -0.02) / len(similar_labels),
+            'neutral_ratio': sum(1 for l in similar_labels if abs(l) <= 0.02) / len(similar_labels),
+            'similar_cases_count': len(similar_cases)
+        }
+        
+        return prediction
 
     def cleanup(self):
         """Cleanup resources"""

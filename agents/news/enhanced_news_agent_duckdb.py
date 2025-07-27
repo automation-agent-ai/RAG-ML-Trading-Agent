@@ -311,7 +311,8 @@ class EnhancedNewsAgentDuckDB:
         lancedb_dir: str = "lancedb_store", 
         table_name: str = "news_embeddings",
         llm_model: str = "gpt-4o-mini",
-        max_group_size: int = 10  # Max items per group before chunking
+        max_group_size: int = 10,  # Max items per group before chunking
+        mode: str = "training"     # Either "training" or "prediction"
     ):
         """
         Initialize Enhanced News Agent
@@ -322,12 +323,14 @@ class EnhancedNewsAgentDuckDB:
             table_name: LanceDB table name for news embeddings
             llm_model: OpenAI model for feature extraction
             max_group_size: Maximum news items per group before chunking
+            mode: Either "training" or "prediction"
         """
         self.db_path = db_path
         self.lancedb_dir = lancedb_dir
         self.table_name = table_name
         self.llm_model = llm_model
         self.max_group_size = max_group_size
+        self.mode = mode
         
         # Initialize components
         self.setup_validator = SetupValidatorDuckDB(db_path=db_path)
@@ -342,12 +345,18 @@ class EnhancedNewsAgentDuckDB:
         self.training_table = None
         try:
             if hasattr(self, 'db') and self.db:
-                self.training_table = self.db.open_table("news_embeddings_training")
-                logger.info("Connected to news_embeddings_training table for similarity search")
+                # Try to open with new table name first, then fall back to old name
+                try:
+                    self.training_table = self.db.open_table("news_embeddings_training")
+                    logger.info("Connected to news_embeddings_training table for similarity search")
+                except Exception:
+                    # Fall back to old table name for backward compatibility
+                    self.training_table = self.db.open_table("news_embeddings")
+                    logger.info("Connected to news_embeddings table for similarity search (legacy name)")
         except Exception as e:
             logger.warning(f"Could not open training embeddings table: {e}")
         
-        logger.info("Enhanced News Agent (DuckDB) initialized successfully")
+        logger.info(f"Enhanced News Agent (DuckDB) initialized successfully in {mode} mode")
     
     def _connect_to_lancedb(self):
         """Connect to LanceDB"""
@@ -357,11 +366,51 @@ class EnhancedNewsAgentDuckDB:
                 raise FileNotFoundError(f"LanceDB directory not found: {lancedb_path}")
             
             self.db = lancedb.connect(self.lancedb_dir)
-            self.table = self.db.open_table(self.table_name)
-            logger.info(f"Connected to LanceDB table: {self.table_name}")
+            
+            # In prediction mode, we don't need to open any tables
+            if hasattr(self, 'mode') and self.mode == 'prediction':
+                logger.info("Prediction mode: Skipping table opening")
+                self.table = None
+                return
+                
+            # Try to open the table
+            try:
+                self.table = self.db.open_table(self.table_name)
+                logger.info(f"Connected to LanceDB table: {self.table_name}")
+            except Exception as e:
+                logger.warning(f"Could not open table {self.table_name}: {e}")
+                self.table = None
+                
+            # Initialize training table for similarity search
+            self.training_table = None
+            try:
+                if hasattr(self, 'db') and self.db:
+                    # Try to open with new table name first, then fall back to old name
+                    try:
+                        self.training_table = self.db.open_table("news_embeddings_training")
+                        logger.info("Connected to news_embeddings_training table for similarity search")
+                    except Exception:
+                        # Fall back to old table name for backward compatibility
+                        try:
+                            self.training_table = self.db.open_table("news_embeddings")
+                            logger.info("Connected to news_embeddings table for similarity search (legacy name)")
+                        except Exception as e:
+                            logger.warning(f"Could not open training embeddings table: {e}")
+                            # In prediction mode without training data, we can't do similarity search
+                            if hasattr(self, 'mode') and self.mode == 'prediction':
+                                logger.warning("No training embeddings available for similarity search in prediction mode")
+            except Exception as e:
+                logger.warning(f"Could not open training embeddings table: {e}")
         except Exception as e:
             logger.error(f"Failed to connect to LanceDB: {e}")
-            raise
+            # In prediction mode, we can continue without LanceDB
+            if hasattr(self, 'mode') and self.mode == 'prediction':
+                logger.warning("Continuing in prediction mode without LanceDB connection")
+                self.db = None
+                self.table = None
+                self.training_table = None
+            else:
+                raise
     
     def _init_duckdb_feature_storage(self):
         """Initialize DuckDB feature storage for news"""
@@ -550,13 +599,32 @@ class EnhancedNewsAgentDuckDB:
         
         return groups
     
-    def find_similar_training_embeddings(self, query_embedding: np.ndarray, limit: int = 10) -> List[Dict]:
-        """Find similar training embeddings with labels"""
+    def find_similar_training_embeddings(self, query_embedding: Union[np.ndarray, str], limit: int = 10) -> List[Dict]:
+        """
+        Find similar training embeddings with labels
+        
+        Args:
+            query_embedding: Either a numpy array embedding or text content to embed
+            limit: Maximum number of similar cases to return
+            
+        Returns:
+            List of similar cases with their metadata and labels
+        """
         if self.training_table is None:
             logger.warning("Training embeddings table not available")
             return []
         
         try:
+            # Handle text input by creating embedding
+            if isinstance(query_embedding, str):
+                model = SentenceTransformer('all-MiniLM-L6-v2')
+                query_embedding = model.encode(query_embedding)
+            
+            # Ensure numpy array
+            if not isinstance(query_embedding, np.ndarray):
+                query_embedding = np.array(query_embedding)
+                
+            # Search for similar cases
             results = self.training_table.search(query_embedding).limit(limit).to_pandas()
             return results.to_dict('records')
         except Exception as e:
@@ -564,7 +632,15 @@ class EnhancedNewsAgentDuckDB:
             return []
     
     def compute_similarity_features(self, similar_cases: List[Dict]) -> Dict[str, float]:
-        """Compute similarity-based features from similar cases"""
+        """
+        Compute similarity-based features from similar cases
+        
+        Args:
+            similar_cases: List of similar cases with their metadata and labels
+            
+        Returns:
+            Dictionary of similarity-based features
+        """
         if not similar_cases:
             return {
                 'positive_signal_strength': 0.0,
@@ -583,18 +659,23 @@ class EnhancedNewsAgentDuckDB:
         
         # Calculate weighted features based on similarity scores
         similarity_scores = [c.get('_distance', 1.0) for c in similar_cases]  # Lower distance = higher similarity
-        max_distance = max(similarity_scores)
+        max_distance = max(similarity_scores) if similarity_scores else 1.0
         similarity_weights = [1 - (score / max_distance) for score in similarity_scores]
         
-        # Calculate weighted ratios
+        # Calculate weighted ratios (with safety check)
+        sum_weights = sum(similarity_weights) if similarity_weights else 1.0
+        if sum_weights == 0:
+            sum_weights = 1.0
+            
         positive_ratio = sum(w for c, w in zip(similar_cases, similarity_weights) 
-                           if c.get('outperformance_10d', 0) > 0.02) / sum(similarity_weights)
+                           if c.get('outperformance_10d', 0) > 0.02) / sum_weights
         
         negative_ratio = sum(w for c, w in zip(similar_cases, similarity_weights)
-                           if c.get('outperformance_10d', 0) < -0.02) / sum(similarity_weights)
+                           if c.get('outperformance_10d', 0) < -0.02) / sum_weights
         
         # Calculate pattern confidence based on consistency
-        performance_std = np.std([c.get('outperformance_10d', 0) for c in similar_cases])
+        performance_values = [c.get('outperformance_10d', 0) for c in similar_cases]
+        performance_std = np.std(performance_values) if performance_values else 1.0
         pattern_confidence = 1.0 / (1.0 + performance_std)  # Higher std = lower confidence
         
         return {
@@ -605,33 +686,18 @@ class EnhancedNewsAgentDuckDB:
             'similar_cases_count': total_cases
         }
     
-    def predict_via_similarity(self, setup_id: str, content: str) -> Dict[str, Any]:
-        """Direct prediction using similarity to training embeddings"""
-        # Create embedding for prediction
-        embedder = NewsEmbeddingPipelineDuckDB(
-            db_path=str(self.db_path),
-            lancedb_dir=str(self.lancedb_dir),
-            include_labels=False,
-            mode="prediction"
-        )
+    def predict_via_similarity(self, query: Union[np.ndarray, str]) -> Dict[str, Any]:
+        """
+        Direct prediction using similarity to training embeddings
         
-        # Create temporary record for embedding
-        record = {
-            'setup_id': setup_id,
-            'chunk_text': content,
-            'text_length': len(content)
-        }
-        
-        # Create embedding
-        records = embedder.create_embeddings([record])
-        if not records:
-            logger.error("Failed to create embedding for prediction")
-            return {}
+        Args:
+            query: Either a numpy array embedding or text content to embed
             
-        query_embedding = np.array(records[0]['vector'])
-        
+        Returns:
+            Dictionary with prediction results
+        """
         # Find similar cases
-        similar_cases = self.find_similar_training_embeddings(query_embedding, limit=10)
+        similar_cases = self.find_similar_training_embeddings(query, limit=10)
         
         if not similar_cases:
             logger.warning("No similar cases found for prediction")
@@ -642,7 +708,11 @@ class EnhancedNewsAgentDuckDB:
         
         # Compute weighted average prediction
         similarity_scores = [1 - case.get('_distance', 1.0) for case in similar_cases]
-        weighted_prediction = np.average(similar_labels, weights=similarity_scores)
+        sum_scores = sum(similarity_scores) if similarity_scores else 1.0
+        if sum_scores == 0:
+            sum_scores = 1.0
+            
+        weighted_prediction = sum(label * score for label, score in zip(similar_labels, similarity_scores)) / sum_scores
         
         # Compute confidence metrics
         prediction = {
@@ -994,29 +1064,17 @@ Extract the features as JSON:"""
         if not news_items or not self.training_table:
             return {}
         
-        # Create embeddings for news items
-        embedder = NewsEmbeddingPipelineDuckDB(
-            db_path=str(self.db_path),
-            lancedb_dir=str(self.lancedb_dir),
-            include_labels=False,
-            mode="prediction"
-        )
-        
         all_similarity_features = []
         
         for item in news_items:
-            # Create temporary record for embedding
-            record = {
-                'setup_id': item.get('setup_id', ''),
-                'chunk_text': item.get('content', ''),
-                'text_length': len(item.get('content', ''))
-            }
-            
-            # Create embedding
-            embedded_records = embedder.create_embeddings([record])
-            if embedded_records:
-                query_embedding = np.array(embedded_records[0]['vector'])
-                similar_cases = self.find_similar_training_embeddings(query_embedding)
+            # Get content from the item
+            content = item.get('content', '')
+            if not content:
+                continue
+                
+            # Use the improved predict_via_similarity method directly with content
+            similar_cases = self.find_similar_training_embeddings(content)
+            if similar_cases:
                 similarity_features = self.compute_similarity_features(similar_cases)
                 all_similarity_features.append(similarity_features)
         
@@ -1030,18 +1088,20 @@ Extract the features as JSON:"""
         
         return {}
 
-    def process_setup(self, setup_id: str, mode: str = "training") -> Optional[NewsFeatureSchema]:
+    def process_setup(self, setup_id: str, mode: str = None) -> Optional[NewsFeatureSchema]:
         """
         Complete pipeline: retrieve, classify, group, extract features, and store
         
         Args:
             setup_id: Trading setup identifier
-            mode: Either 'training' or 'prediction'
+            mode: Either 'training' or 'prediction' (overrides self.mode if provided)
             
         Returns:
             Extracted news features or None if processing failed
         """
-        logger.info(f"Processing news for setup: {setup_id}")
+        # Use provided mode or fall back to instance mode
+        current_mode = mode if mode is not None else self.mode
+        logger.info(f"Processing news for setup: {setup_id} in {current_mode} mode")
         
         # Step 1: Retrieve ALL news for this setup
         news_df = self.retrieve_news_by_setup_id(setup_id)
@@ -1063,7 +1123,7 @@ Extract the features as JSON:"""
             group_items = news_groups.get(group_name, [])
             logger.info(f"Processing {group_name}: {len(group_items)} items")
             
-            group_features = self.extract_group_features(group_name, group_items, mode)
+            group_features = self.extract_group_features(group_name, group_items, current_mode)
             all_group_features[group_name] = group_features
         
         # Step 5: Create global explanation
@@ -1075,6 +1135,23 @@ Extract the features as JSON:"""
             
             # Step 7: Store features
             self.store_features(features)
+            
+            # Step 8: In prediction mode, generate similarity-based predictions
+            if current_mode == 'prediction' and self.training_table is not None:
+                # Create content for similarity search
+                content = global_explanation
+                for group_name, features in all_group_features.items():
+                    if features.get('synthetic_summary'):
+                        content += f" {features['synthetic_summary']}"
+                
+                # Generate prediction
+                prediction = self.predict_via_similarity(content)
+                if prediction:
+                    prediction['setup_id'] = setup_id
+                    prediction['domain'] = 'news'
+                    prediction['prediction_timestamp'] = datetime.now().isoformat()
+                    logger.info(f"Generated similarity prediction for {setup_id}: {prediction.get('predicted_outperformance', 'N/A')}")
+                    return features, prediction
             
             logger.info(f"Successfully processed news features for setup {setup_id}")
             return features

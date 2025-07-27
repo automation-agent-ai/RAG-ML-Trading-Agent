@@ -6,28 +6,21 @@ Processes user posts from DuckDB database, creates embeddings of post content,
 and stores in LanceDB with metadata and performance labels for RAG retrieval.
 """
 
-import os
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import logging
-import hashlib
 import re
 import sys
 
-# LanceDB and embeddings
-import lancedb
-from sentence_transformers import SentenceTransformer
-
-# Add current directory to path for imports
-sys.path.append(str(Path(__file__).parent))
 # Add project root to path for proper imports
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+from embeddings.base_embedder import BaseEmbedder
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
 
 # Configure logging
@@ -107,11 +100,14 @@ def chunk_post_content(content: str, max_chunk_size: int = 300, overlap: int = 5
     return chunks
 
 
-class UserPostsEmbedderDuckDB:
+class UserPostsEmbedderDuckDB(BaseEmbedder):
     """DuckDB-based User Posts Domain Embedding Pipeline"""
     
     def __init__(self, db_path: str = "data/sentiment_system.duckdb", 
                  lancedb_dir: str = "lancedb_store",
+                 embedding_model: str = "all-MiniLM-L6-v2",
+                 max_chunk_size: int = 300,
+                 chunk_overlap: int = 50,
                  include_labels: bool = True,
                  mode: str = "training"):
         """
@@ -120,32 +116,39 @@ class UserPostsEmbedderDuckDB:
         Args:
             db_path: Path to DuckDB database
             lancedb_dir: Directory for LanceDB storage
+            embedding_model: Model name for sentence transformer
+            max_chunk_size: Maximum tokens per text chunk
+            chunk_overlap: Overlap between consecutive chunks
             include_labels: Whether to include performance labels in embeddings
             mode: Either 'training' or 'prediction'
         """
-        self.db_path = Path(db_path)
-        self.lancedb_dir = Path(lancedb_dir)
-        self.include_labels = include_labels
-        self.mode = mode
+        # Initialize base class
+        super().__init__(
+            db_path=db_path,
+            lancedb_dir=lancedb_dir,
+            embedding_model=embedding_model,
+            include_labels=include_labels,
+            mode=mode
+        )
         
-        # Initialize setup validator
-        self.setup_validator = SetupValidatorDuckDB(db_path=str(self.db_path))
-        logger.info(f"Setup validator initialized with {len(self.setup_validator.confirmed_setup_ids)} confirmed setups")
-        
-        logger.info("Loading embedding model: all-MiniLM-L6-v2")
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
-        
-        # Initialize LanceDB
-        self.lancedb_dir.mkdir(exist_ok=True)
-        self.db = lancedb.connect(str(self.lancedb_dir))
+        self.max_chunk_size = max_chunk_size
+        self.chunk_overlap = chunk_overlap
         
         # Data containers
         self.posts_data = None
-        self.labels_data = None
+        self.specific_setup_ids = False
+        self.target_setup_ids = []
+    
+    def get_text_field_name(self) -> str:
+        """Get the name of the text field to embed"""
+        return "post_content"
     
     def load_data(self):
         """Load user posts and labels data from DuckDB"""
-        logger.info("Loading user posts data from DuckDB...")
+        self.logger.info("Loading user posts data from DuckDB...")
+        
+        # Load labels first (using base class method)
+        super().load_labels()
         
         # Load user posts for target setups (specific or all confirmed)
         if self.specific_setup_ids:
@@ -161,36 +164,19 @@ class UserPostsEmbedderDuckDB:
                 ORDER BY setup_id, post_date
                 """
                 self.posts_data = self.setup_validator.conn.execute(query).fetchdf()
-                logger.info(f"Loaded {len(self.posts_data)} user posts for specific setups")
+                self.logger.info(f"Loaded {len(self.posts_data)} user posts for specific setups")
             except Exception as e:
-                logger.error(f"Error loading user posts: {e}")
+                self.logger.error(f"Error loading user posts: {e}")
                 self.posts_data = pd.DataFrame()
-                
-            # Query labels directly
-            try:
-                query = f"""
-                SELECT l.*
-                FROM labels l
-                WHERE l.setup_id IN ({setup_ids_str})
-                ORDER BY l.setup_id
-                """
-                self.labels_data = self.setup_validator.conn.execute(query).fetchdf()
-                logger.info(f"Loaded {len(self.labels_data)} labels for specific setups")
-            except Exception as e:
-                logger.error(f"Error loading labels: {e}")
-                self.labels_data = pd.DataFrame()
         else:
             # Load all confirmed setups (original behavior)
             self.posts_data = self.setup_validator.get_user_posts_for_confirmed_setups()
-            logger.info(f"Loaded {len(self.posts_data)} user posts")
-            
-            self.labels_data = self.setup_validator.get_labels_for_confirmed_setups()
-            logger.info(f"Loaded {len(self.labels_data)} confirmed setup labels")
+            self.logger.info(f"Loaded {len(self.posts_data)} user posts")
     
     def process_posts(self):
         """Process user posts data"""
-        if self.posts_data.empty:
-            logger.warning("No user posts data to process")
+        if self.posts_data is None or self.posts_data.empty:
+            self.logger.warning("No user posts data to process")
             return pd.DataFrame()
         
         # Clean post content
@@ -200,7 +186,7 @@ class UserPostsEmbedderDuckDB:
         initial_count = len(self.posts_data)
         self.posts_data = self.posts_data[self.posts_data['post_content_clean'] != '']
         filtered_count = len(self.posts_data)
-        logger.info(f"Filtered out {initial_count - filtered_count} empty posts, {filtered_count} remaining")
+        self.logger.info(f"Filtered out {initial_count - filtered_count} empty posts, {filtered_count} remaining")
         
         # Extract sentiment indicators
         sentiment_data = self.posts_data['post_content_clean'].apply(extract_sentiment_indicators)
@@ -211,43 +197,24 @@ class UserPostsEmbedderDuckDB:
         if 'post_date' in processed_df.columns:
             processed_df['post_date'] = pd.to_datetime(processed_df['post_date'])
         
-        # Merge with performance labels
-        if not self.labels_data.empty:
-            merged_df = processed_df.merge(
-                self.labels_data[['setup_id', 'stock_return_10d', 'benchmark_return_10d', 'outperformance_10d', 
-                               'days_outperformed_10d', 'setup_date']],
-                on='setup_id',
-                how='left'
-            )
-        else:
-            merged_df = processed_df
-            for col in ['stock_return_10d', 'benchmark_return_10d', 'outperformance_10d', 'days_outperformed_10d', 'setup_date']:
-                merged_df[col] = 0.0 if 'return' in col or 'performance' in col else ''
-        
         # Add performance label indicators
-        merged_df['has_performance_labels'] = ~merged_df['stock_return_10d'].isna()
+        processed_df['has_performance_labels'] = False
         
-        # Fill NaN values for performance metrics
-        performance_cols = ['stock_return_10d', 'benchmark_return_10d', 'outperformance_10d', 'days_outperformed_10d']
-        for col in performance_cols:
-            if col in merged_df.columns:
-                merged_df[col] = merged_df[col].fillna(0.0)
-        
-        logger.info(f"Processed data: {len(merged_df)} posts, {merged_df['has_performance_labels'].sum()} with performance labels")
-        return merged_df
+        self.logger.info(f"Processed data: {len(processed_df)} posts")
+        return processed_df
     
-    def create_embeddings_dataset(self, processed_df: pd.DataFrame, max_chunk_size: int = 300, overlap: int = 50) -> List[Dict[str, Any]]:
+    def create_embeddings_dataset(self, processed_df: pd.DataFrame) -> List[Dict[str, Any]]:
         """Create embeddings dataset from processed posts"""
         if processed_df.empty:
             return []
         
-        logger.info("Creating embeddings dataset...")
+        self.logger.info("Creating embeddings dataset...")
         records = []
         total_chunks = 0
         
         for idx, row in processed_df.iterrows():
             # Chunk the post content
-            chunks = chunk_post_content(row['post_content_clean'], max_chunk_size, overlap)
+            chunks = chunk_post_content(row['post_content_clean'], self.max_chunk_size, self.chunk_overlap)
             
             if not chunks:
                 continue
@@ -255,9 +222,6 @@ class UserPostsEmbedderDuckDB:
             for chunk_idx, chunk in enumerate(chunks):
                 # Create unique ID for each chunk
                 chunk_id = f"{row['post_id']}_chunk_{chunk_idx}"
-                
-                # Generate embedding
-                embedding = self.model.encode(chunk)
                 
                 # Create record
                 record = {
@@ -286,17 +250,11 @@ class UserPostsEmbedderDuckDB:
                     'sentiment_score': float(row['sentiment_score']),
                     'post_length': int(row['post_length']),
                     
-                    # Performance labels (ONLY for training - exclude in prediction mode)
-                    'has_performance_labels': bool(row['has_performance_labels']),
-                    # NOTE: Removed performance metrics to prevent data leakage during prediction
-                    # 'stock_return_10d': float(row['stock_return_10d']),
-                    # 'benchmark_return_10d': float(row['benchmark_return_10d']),
-                    # 'outperformance_10d': float(row['outperformance_10d']),
-                    # 'days_outperformed_10d': int(row['days_outperformed_10d']),
-                    'setup_date': str(row.get('setup_date', '')),
+                    # Performance labels placeholder (will be filled by enrich_with_labels)
+                    'has_performance_labels': False,
+                    'setup_date': '',
                     
-                    # Embedding
-                    'vector': embedding.tolist(),
+                    # Embedding will be added later
                     'embedded_at': datetime.now().isoformat()
                 }
                 
@@ -304,43 +262,10 @@ class UserPostsEmbedderDuckDB:
                 total_chunks += 1
                 
                 if total_chunks % 50 == 0:
-                    logger.info(f"Processed {total_chunks} chunks...")
+                    self.logger.info(f"Processed {total_chunks} chunks...")
         
-        logger.info(f"Created embeddings for {total_chunks} chunks from {len(processed_df)} posts")
+        self.logger.info(f"Created {total_chunks} chunks from {len(processed_df)} posts")
         return records
-    
-    def store_in_lancedb(self, records: List[Dict[str, Any]], table_name: str = "userposts_embeddings") -> None:
-        """Store embeddings in LanceDB"""
-        if not records:
-            logger.warning("No records to store")
-            return
-        
-        logger.info(f"Storing {len(records)} records in LanceDB")
-        
-        # Ensure directory exists
-        self.lancedb_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Connect to LanceDB
-        db = lancedb.connect(str(self.lancedb_dir))
-        
-        # Drop existing table if it exists
-        try:
-            db.drop_table(table_name)
-            logger.info(f"Dropped existing table: {table_name}")
-        except Exception:
-            pass
-        
-        # Create table
-        df = pd.DataFrame(records)
-        df['vector'] = df['vector'].apply(lambda x: np.array(x, dtype=np.float32))
-        
-        table = db.create_table(table_name, df)
-        
-        logger.info(f"Created LanceDB table '{table_name}' with {len(table)} records")
-        
-        # Verify the table
-        sample_query = table.search(records[0]['vector']).limit(3).to_pandas()
-        logger.info(f"Table verification: Retrieved {len(sample_query)} sample records")
     
     def generate_summary_stats(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Generate summary statistics about the embedded data"""
@@ -357,16 +282,21 @@ class UserPostsEmbedderDuckDB:
             'unique_users': df['user_handle'].nunique(),
             'avg_chunk_length': df['post_length'].mean(),
             'avg_sentiment_score': df['sentiment_score'].mean(),
-            'posts_with_labels': df['has_performance_labels'].sum(),
-            'avg_stock_return': df[df['has_performance_labels']]['stock_return_10d'].mean() if df['has_performance_labels'].any() else 0,
-            'avg_outperformance': df[df['has_performance_labels']]['outperformance_10d'].mean() if df['has_performance_labels'].any() else 0
+            'posts_with_labels': df['has_performance_labels'].sum()
         }
+        
+        # Add performance metrics only if we have labels
+        if 'outperformance_10d' in df.columns and df['has_performance_labels'].any():
+            stats.update({
+                'avg_stock_return': df[df['has_performance_labels']]['stock_return_10d'].mean(),
+                'avg_outperformance': df[df['has_performance_labels']]['outperformance_10d'].mean()
+            })
         
         return stats
     
     def run_pipeline(self):
         """Execute the complete user posts embedding pipeline"""
-        logger.info("Starting DuckDB-based User Posts Domain Embedding Pipeline")
+        self.logger.info("Starting DuckDB-based User Posts Domain Embedding Pipeline")
         
         # Load data
         self.load_data()
@@ -374,21 +304,42 @@ class UserPostsEmbedderDuckDB:
         # Process posts
         processed_df = self.process_posts()
         
-        # Create embeddings
+        # Create embeddings dataset
         records = self.create_embeddings_dataset(processed_df)
         
-        # Store in LanceDB
-        self.store_in_lancedb(records)
+        # Enrich with labels (only in training mode)
+        enriched_records = self.enrich_with_labels(records)
+        
+        # Create embeddings
+        final_records = self.create_embeddings(enriched_records)
+        
+        # Store in LanceDB (only in training mode)
+        self.store_in_lancedb(final_records, "userposts_embeddings")
         
         # Generate and display summary
-        stats = self.generate_summary_stats(records)
+        stats = self.generate_summary_stats(final_records)
         
-        logger.info("Pipeline Summary:")
+        self.logger.info("Pipeline Summary:")
         for key, value in stats.items():
-            logger.info(f"  {key}: {value}")
+            self.logger.info(f"  {key}: {value}")
         
         # Close DuckDB connection
-        self.setup_validator.close()
+        self.cleanup()
+    
+    def process_setups(self, setup_ids: List[str]) -> bool:
+        """Process specific setup IDs"""
+        self.logger.info(f"Processing user posts embeddings for {len(setup_ids)} setups")
+        
+        # Set specific setup IDs
+        self.specific_setup_ids = True
+        self.target_setup_ids = setup_ids
+        
+        try:
+            self.run_pipeline()
+            return True
+        except Exception as e:
+            self.logger.error(f"Error processing setups: {e}")
+            return False
 
 
 def main():

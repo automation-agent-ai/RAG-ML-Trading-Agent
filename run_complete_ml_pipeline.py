@@ -48,34 +48,38 @@ class CompletePipeline:
         self.analyst_agent = None
         self.userposts_agent = None
         
-    def _init_agents(self):
-        """Initialize agents if not already initialized"""
-        if self.news_agent is None:
+    def _init_agents(self, mode: str = "training"):
+        """Initialize all agents"""
+        if not hasattr(self, 'news_agent') or self.news_agent is None:
             from agents.news.enhanced_news_agent_duckdb import EnhancedNewsAgentDuckDB
             self.news_agent = EnhancedNewsAgentDuckDB(
-                db_path=str(self.db_path),
-                lancedb_dir=str(self.lancedb_dir)
+                db_path=self.db_path,
+                lancedb_dir=self.lancedb_dir,
+                mode=mode
             )
             
-        if self.fundamentals_agent is None:
+        if not hasattr(self, 'fundamentals_agent') or self.fundamentals_agent is None:
             from agents.fundamentals.enhanced_fundamentals_agent_duckdb import EnhancedFundamentalsAgentDuckDB
             self.fundamentals_agent = EnhancedFundamentalsAgentDuckDB(
-                db_path=str(self.db_path),
-                lancedb_dir=str(self.lancedb_dir)
+                db_path=self.db_path,
+                lancedb_dir=self.lancedb_dir,
+                mode=mode
             )
             
-        if self.analyst_agent is None:
+        if not hasattr(self, 'analyst_agent') or self.analyst_agent is None:
             from agents.analyst_recommendations.enhanced_analyst_recommendations_agent_duckdb import EnhancedAnalystRecommendationsAgentDuckDB
             self.analyst_agent = EnhancedAnalystRecommendationsAgentDuckDB(
-                db_path=str(self.db_path),
-                lancedb_dir=str(self.lancedb_dir)
+                db_path=self.db_path,
+                lancedb_dir=self.lancedb_dir,
+                mode=mode
             )
             
-        if self.userposts_agent is None:
+        if not hasattr(self, 'userposts_agent') or self.userposts_agent is None:
             from agents.userposts.enhanced_userposts_agent_complete import EnhancedUserPostsAgentComplete
             self.userposts_agent = EnhancedUserPostsAgentComplete(
-                db_path=str(self.db_path),
-                lancedb_dir=str(self.lancedb_dir)
+                db_path=self.db_path,
+                lancedb_dir=self.lancedb_dir,
+                mode=mode
             )
     
     def create_embeddings(self, setup_ids: List[str], mode: str = 'training') -> Dict[str, bool]:
@@ -145,108 +149,118 @@ class CompletePipeline:
         
         return results
         
-    def extract_features(self, setup_ids: List[str], mode: str = 'training') -> Dict[str, bool]:
-        """Extract features for all domains with similarity enhancement in prediction mode"""
+    def extract_features(self, setup_ids: List[str], mode: str = "training"):
+        """
+        Extract features for setup_ids
+        
+        Args:
+            setup_ids: List of setup IDs to process
+            mode: Either 'training' or 'prediction'
+        
+        Returns:
+            Dictionary with success status for each agent
+        """
         logger.info(f"🔧 RUNNING FEATURE EXTRACTION ({mode.upper()} MODE)")
         logger.info("=" * 60)
         
         # Initialize agents if not already done
-        self._init_agents()
+        self._init_agents(mode)
         
         results = {}
         similarity_predictions = {}
         
-        try:
-            # 1. Fundamentals Features
-            logger.info("📊 Extracting fundamentals features...")
+        # Process each setup ID
+        for setup_id in setup_ids:
+            similarity_predictions[setup_id] = {}
             
-            # Override to target setups only
-            self.fundamentals_agent.setup_validator.confirmed_setup_ids = set(setup_ids)
-            
-            fundamentals_results = {}
-            for setup_id in setup_ids:
-                try:
-                    # Process setup with mode parameter
-                    features = self.fundamentals_agent.process_setup(setup_id, mode=mode)
-                    fundamentals_results[setup_id] = features is not None
+            # Process with news agent
+            try:
+                logger.info(f"Calling news_agent.process_setup for {setup_id}")
+                news_result = self.news_agent.process_setup(setup_id, mode)
+                logger.info(f"News result type: {type(news_result)}")
+                
+                if isinstance(news_result, tuple) and len(news_result) == 2:
+                    # Unpack features and prediction
+                    features, prediction = news_result
+                    logger.info(f"News prediction: {prediction}")
+                    similarity_predictions[setup_id]['news'] = prediction
+                else:
+                    logger.info("News agent did not return a prediction")
                     
-                    # In prediction mode, also get direct similarity predictions
-                    if mode == 'prediction' and features is not None:
-                        # Create embedding for similarity search
-                        embedding = self._create_temporary_embedding(
-                            setup_id, 
-                            features.financial_summary if hasattr(features, 'financial_summary') else "",
-                            domain="fundamentals"
-                        )
-                        
-                        if embedding is not None:
-                            # Get similarity prediction
-                            sim_prediction = self.fundamentals_agent.predict_via_similarity(embedding)
-                            if sim_prediction:
-                                if setup_id not in similarity_predictions:
-                                    similarity_predictions[setup_id] = {}
-                                similarity_predictions[setup_id]['fundamentals'] = sim_prediction
-                except Exception as e:
-                    logger.error(f"Error processing fundamentals for setup {setup_id}: {e}")
-                    fundamentals_results[setup_id] = False
+                results['news'] = True
+            except Exception as e:
+                logger.error(f"Error processing news for {setup_id}: {e}")
+                results['news'] = False
             
-            successful = sum(1 for r in fundamentals_results.values() if r)
-            results['fundamentals_features'] = successful > 0
-            logger.info(f"✅ Fundamentals features: {successful}/{len(setup_ids)} successful")
-            
-        except Exception as e:
-            logger.error(f"❌ Fundamentals features failed: {e}")
-            results['fundamentals_features'] = False
-            
-        try:
-            # 2. News Features
-            logger.info("📰 Extracting news features...")
-            
-            # Override to target setups only
-            self.news_agent.setup_validator.confirmed_setup_ids = set(setup_ids)
-            
-            news_results = {}
-            for setup_id in setup_ids:
-                try:
-                    # Process setup with mode parameter
-                    features = self.news_agent.process_setup(setup_id, mode=mode)
-                    news_results[setup_id] = features is not None
+            # Process with fundamentals agent
+            try:
+                logger.info(f"Calling fundamentals_agent.process_setup for {setup_id}")
+                fundamentals_result = self.fundamentals_agent.process_setup(setup_id, mode)
+                logger.info(f"Fundamentals result type: {type(fundamentals_result)}")
+                
+                if isinstance(fundamentals_result, tuple) and len(fundamentals_result) == 2:
+                    # Unpack features and prediction
+                    features, prediction = fundamentals_result
+                    logger.info(f"Fundamentals prediction: {prediction}")
+                    similarity_predictions[setup_id]['fundamentals'] = prediction
+                else:
+                    logger.info("Fundamentals agent did not return a prediction")
                     
-                    # In prediction mode, also get direct similarity predictions
-                    if mode == 'prediction' and features is not None:
-                        # Get all news content for this setup
-                        news_df = self.news_agent.retrieve_news_by_setup_id(setup_id)
-                        if len(news_df) > 0:
-                            # Create embedding for similarity search
-                            combined_content = "\n\n".join(news_df['content'].tolist()[:5])  # Limit to first 5 news items
-                            embedding = self._create_temporary_embedding(setup_id, combined_content, domain="news")
-                            
-                            if embedding is not None:
-                                # Get similarity prediction
-                                sim_prediction = self.news_agent.predict_via_similarity(embedding)
-                                if sim_prediction:
-                                    if setup_id not in similarity_predictions:
-                                        similarity_predictions[setup_id] = {}
-                                    similarity_predictions[setup_id]['news'] = sim_prediction
-                except Exception as e:
-                    logger.error(f"Error processing news for setup {setup_id}: {e}")
-                    news_results[setup_id] = False
+                results['fundamentals'] = True
+            except Exception as e:
+                logger.error(f"Error processing fundamentals for {setup_id}: {e}")
+                results['fundamentals'] = False
             
-            successful = sum(1 for r in news_results.values() if r)
-            results['news_features'] = successful > 0
-            logger.info(f"✅ News features: {successful}/{len(setup_ids)} successful")
+            # Process with analyst agent
+            try:
+                logger.info(f"Calling analyst_agent.process_setup for {setup_id}")
+                analyst_result = self.analyst_agent.process_setup(setup_id, mode)
+                logger.info(f"Analyst result type: {type(analyst_result)}")
+                
+                if isinstance(analyst_result, tuple) and len(analyst_result) == 2:
+                    # Unpack features and prediction
+                    features, prediction = analyst_result
+                    logger.info(f"Analyst prediction: {prediction}")
+                    similarity_predictions[setup_id]['analyst'] = prediction
+                else:
+                    logger.info("Analyst agent did not return a prediction")
+                    
+                results['analyst'] = True
+            except Exception as e:
+                logger.error(f"Error processing analyst recommendations for {setup_id}: {e}")
+                results['analyst'] = False
             
-        except Exception as e:
-            logger.error(f"❌ News features failed: {e}")
-            results['news_features'] = False
-            
-        # Add other domains (analyst recommendations, userposts) here
-        # ...
+            # Process with userposts agent
+            try:
+                logger.info(f"Calling userposts_agent.process_setup for {setup_id}")
+                userposts_result = self.userposts_agent.process_setup(setup_id, mode)
+                logger.info(f"UserPosts result type: {type(userposts_result)}")
+                
+                if isinstance(userposts_result, tuple) and len(userposts_result) == 2:
+                    # Unpack features and prediction
+                    features, prediction = userposts_result
+                    logger.info(f"UserPosts prediction: {prediction}")
+                    similarity_predictions[setup_id]['userposts'] = prediction
+                else:
+                    logger.info("UserPosts agent did not return a prediction")
+                    
+                results['userposts'] = True
+            except Exception as e:
+                logger.error(f"Error processing user posts for {setup_id}: {e}")
+                results['userposts'] = False
         
         # Store similarity predictions if in prediction mode
-        if mode == 'prediction' and similarity_predictions:
+        logger.info(f"Similarity predictions: {similarity_predictions}")
+        if mode == "prediction" and any(similarity_predictions.values()):
+            logger.info("Storing similarity predictions")
             self._store_similarity_predictions(similarity_predictions)
-            
+        else:
+            logger.info("No similarity predictions to store or not in prediction mode")
+        
+        # Print summary
+        for agent_name, success in results.items():
+            logger.info(f"✅ {agent_name.capitalize()} features: {'Success' if success else 'Failed'}")
+        
         return results
     
     def _create_temporary_embedding(self, setup_id: str, content: str, domain: str) -> Optional[np.ndarray]:
@@ -260,31 +274,20 @@ class CompletePipeline:
             return None
     
     def _store_similarity_predictions(self, predictions: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
-        """Store similarity-based predictions in DuckDB"""
+        """
+        Store similarity-based predictions in DuckDB
+        
+        Args:
+            predictions: Dictionary of predictions by setup_id and domain
+        """
+        if not predictions:
+            logger.info("No similarity predictions to store")
+            return
+        
+        # Debug: Print predictions structure
+        logger.info(f"Predictions structure: {predictions}")
+            
         try:
-            import duckdb
-            
-            # Prepare records for insertion
-            records = []
-            for setup_id, domains in predictions.items():
-                record = {
-                    'setup_id': setup_id,
-                    'prediction_timestamp': datetime.now().isoformat()
-                }
-                
-                # Add domain-specific predictions
-                for domain, prediction in domains.items():
-                    for key, value in prediction.items():
-                        record[f"{domain}_{key}"] = value
-                
-                records.append(record)
-            
-            if not records:
-                return
-                
-            # Create DataFrame
-            df = pd.DataFrame(records)
-            
             # Connect to DuckDB
             conn = duckdb.connect(self.db_path)
             
@@ -292,49 +295,62 @@ class CompletePipeline:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS similarity_predictions (
                     setup_id VARCHAR,
-                    prediction_timestamp TIMESTAMP,
-                    
-                    -- News domain predictions
-                    news_predicted_outperformance DOUBLE,
-                    news_confidence DOUBLE,
-                    news_positive_ratio DOUBLE,
-                    news_negative_ratio DOUBLE,
-                    news_neutral_ratio DOUBLE,
-                    
-                    -- Fundamentals domain predictions
-                    fundamentals_predicted_outperformance DOUBLE,
-                    fundamentals_confidence DOUBLE,
-                    fundamentals_positive_ratio DOUBLE,
-                    fundamentals_negative_ratio DOUBLE,
-                    fundamentals_neutral_ratio DOUBLE,
-                    
-                    -- Analyst domain predictions
-                    analyst_predicted_outperformance DOUBLE,
-                    analyst_confidence DOUBLE,
-                    analyst_positive_ratio DOUBLE,
-                    analyst_negative_ratio DOUBLE,
-                    analyst_neutral_ratio DOUBLE,
-                    
-                    -- UserPosts domain predictions
-                    userposts_predicted_outperformance DOUBLE,
-                    userposts_confidence DOUBLE,
-                    userposts_positive_ratio DOUBLE,
-                    userposts_negative_ratio DOUBLE,
-                    userposts_neutral_ratio DOUBLE
+                    domain VARCHAR,
+                    predicted_outperformance DOUBLE,
+                    confidence DOUBLE,
+                    positive_ratio DOUBLE,
+                    negative_ratio DOUBLE,
+                    neutral_ratio DOUBLE,
+                    similar_cases_count INTEGER,
+                    prediction_timestamp VARCHAR,
+                    PRIMARY KEY (setup_id, domain)
                 )
             """)
             
-            # Insert records
-            conn.register('predictions_df', df)
-            conn.execute("INSERT INTO similarity_predictions SELECT * FROM predictions_df")
+            # Convert predictions to rows
+            rows = []
+            for setup_id, domains in predictions.items():
+                logger.info(f"Processing setup_id: {setup_id}, domains: {list(domains.keys())}")
+                for domain, prediction in domains.items():
+                    if prediction:  # Skip empty predictions
+                        logger.info(f"Processing domain: {domain}, prediction: {prediction}")
+                        row = (
+                            setup_id,
+                            domain,
+                            prediction.get('predicted_outperformance', 0.0),
+                            prediction.get('confidence', 0.0),
+                            prediction.get('positive_ratio', 0.0),
+                            prediction.get('negative_ratio', 0.0),
+                            prediction.get('neutral_ratio', 0.0),
+                            prediction.get('similar_cases_count', 0),
+                            prediction.get('prediction_timestamp', datetime.now().isoformat())
+                        )
+                        rows.append(row)
             
-            # Close connection
+            # Insert rows
+            if rows:
+                logger.info(f"Inserting {len(rows)} rows into similarity_predictions table")
+                conn.executemany("""
+                    INSERT OR REPLACE INTO similarity_predictions
+                    (setup_id, domain, predicted_outperformance, confidence, 
+                     positive_ratio, negative_ratio, neutral_ratio, 
+                     similar_cases_count, prediction_timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, rows)
+                
+                # Verify insertion
+                count = conn.execute("SELECT COUNT(*) FROM similarity_predictions").fetchone()[0]
+                logger.info(f"Verified {count} records in similarity_predictions table")
+            else:
+                logger.info("No valid similarity predictions to store")
+                
+            # Commit and close
+            conn.commit()
             conn.close()
-            
-            logger.info(f"Stored {len(records)} similarity predictions")
             
         except Exception as e:
             logger.error(f"Error storing similarity predictions: {e}")
+            # Continue without failing the pipeline
     
     def create_ml_features(self, setup_ids: List[str], mode: str = 'training') -> Dict[str, Dict[str, int]]:
         """Create ML feature tables by merging domain features"""
