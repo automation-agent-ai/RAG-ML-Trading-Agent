@@ -675,6 +675,9 @@ Focus only on financial performance, earnings, profit warnings, and capital stru
         if not similar_cases:
             logger.warning("No similar cases found for prediction")
             return {}
+        
+        # Use label converter
+        label_converter = LabelConverter()
             
         # Extract labels from similar cases
         similar_labels = [case.get('outperformance_10d', 0.0) for case in similar_cases]
@@ -687,13 +690,16 @@ Focus only on financial performance, earnings, profit warnings, and capital stru
             
         weighted_prediction = sum(label * score for label, score in zip(similar_labels, similarity_scores)) / sum_scores
         
+        # Get class distribution using the label converter
+        class_distribution = get_class_distribution(similar_labels)
+        
         # Compute confidence metrics
         prediction = {
             'predicted_outperformance': float(weighted_prediction),
             'confidence': float(1.0 / (1.0 + np.std(similar_labels))),
-            'positive_ratio': sum(1 for l in similar_labels if l > 0.02) / len(similar_labels),
-            'negative_ratio': sum(1 for l in similar_labels if l < -0.02) / len(similar_labels),
-            'neutral_ratio': sum(1 for l in similar_labels if abs(l) <= 0.02) / len(similar_labels),
+            'positive_ratio': class_distribution['positive'],
+            'negative_ratio': class_distribution['negative'],
+            'neutral_ratio': class_distribution['neutral'],
             'similar_cases_count': len(similar_cases)
         }
         

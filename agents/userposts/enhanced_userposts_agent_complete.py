@@ -34,6 +34,9 @@ import numpy as np
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+    
+# Import label converter
+from core.label_converter import LabelConverter, get_class_distribution
 
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
 
@@ -819,10 +822,14 @@ Return ONLY the JSON object."""
                 'similar_cases_count': 0
             }
         
+        # Use label converter for classification
+        label_converter = LabelConverter()
+        performance_values = [c.get('outperformance_10d', 0) for c in similar_cases]
+        
         # Calculate performance-based features
-        positive_cases = [c for c in similar_cases if c.get('outperformance_10d', 0) > 0.02]  # 2% threshold
-        negative_cases = [c for c in similar_cases if c.get('outperformance_10d', 0) < -0.02]
-        neutral_cases = [c for c in similar_cases if abs(c.get('outperformance_10d', 0)) <= 0.02]
+        positive_cases = [c for c in similar_cases if label_converter.outperformance_to_class_int(c.get('outperformance_10d', 0)) == 1]
+        negative_cases = [c for c in similar_cases if label_converter.outperformance_to_class_int(c.get('outperformance_10d', 0)) == -1]
+        neutral_cases = [c for c in similar_cases if label_converter.outperformance_to_class_int(c.get('outperformance_10d', 0)) == 0]
         
         total_cases = len(similar_cases)
         
@@ -836,14 +843,14 @@ Return ONLY the JSON object."""
         if sum_weights == 0:
             sum_weights = 1.0
             
+        # Use label converter thresholds
         positive_ratio = sum(w for c, w in zip(similar_cases, similarity_weights) 
-                           if c.get('outperformance_10d', 0) > 0.02) / sum_weights
+                           if label_converter.outperformance_to_class_int(c.get('outperformance_10d', 0)) == 1) / sum_weights
         
         negative_ratio = sum(w for c, w in zip(similar_cases, similarity_weights)
-                           if c.get('outperformance_10d', 0) < -0.02) / sum_weights
+                           if label_converter.outperformance_to_class_int(c.get('outperformance_10d', 0)) == -1) / sum_weights
         
         # Calculate pattern confidence based on consistency
-        performance_values = [c.get('outperformance_10d', 0) for c in similar_cases]
         performance_std = np.std(performance_values) if performance_values else 1.0
         pattern_confidence = 1.0 / (1.0 + performance_std)  # Higher std = lower confidence
         
@@ -873,6 +880,9 @@ Return ONLY the JSON object."""
         if not similar_cases:
             logger.warning("No similar cases found for prediction")
             return {}
+        
+        # Use label converter
+        label_converter = LabelConverter()
             
         # Extract labels from similar cases
         similar_labels = [case.get('outperformance_10d', 0.0) for case in similar_cases]
@@ -889,13 +899,16 @@ Return ONLY the JSON object."""
         weighted_prediction = sum(label * score for label, score in zip(similar_labels, similarity_scores)) / sum_scores
         logger.info(f"Weighted prediction: {weighted_prediction}")
         
+        # Get class distribution using the label converter
+        class_distribution = get_class_distribution(similar_labels)
+        
         # Compute confidence metrics
         prediction = {
             'predicted_outperformance': float(weighted_prediction),
             'confidence': float(1.0 / (1.0 + np.std(similar_labels))),
-            'positive_ratio': sum(1 for l in similar_labels if l > 0.02) / len(similar_labels),
-            'negative_ratio': sum(1 for l in similar_labels if l < -0.02) / len(similar_labels),
-            'neutral_ratio': sum(1 for l in similar_labels if abs(l) <= 0.02) / len(similar_labels),
+            'positive_ratio': class_distribution['positive'],
+            'negative_ratio': class_distribution['negative'],
+            'neutral_ratio': class_distribution['neutral'],
             'similar_cases_count': len(similar_cases)
         }
         

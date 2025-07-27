@@ -89,66 +89,93 @@ class CompletePipeline:
                 mode=mode
             )
     
-    def create_embeddings(self, setup_ids: List[str], mode: str = 'training') -> Dict[str, bool]:
-        """Create embeddings with proper training/prediction mode separation"""
+    def create_embeddings(self, setup_ids: List[str], mode: str = 'training', domains: List[str] = ['all']) -> Dict[str, bool]:
+        """
+        Create embeddings with proper training/prediction mode separation
+        
+        Args:
+            setup_ids: List of setup IDs to process
+            mode: Either 'training' or 'prediction'
+            domains: List of domains to process ('all', 'news', 'fundamentals', 'analyst', 'userposts')
+        
+        Returns:
+            Dictionary with success status for each domain
+        """
         logger.info(f"🎰 CREATING EMBEDDINGS ({mode.upper()} MODE)")
         logger.info("=" * 60)
         
         results = {}
         include_labels = (mode == 'training')
+        process_all = 'all' in domains
         
         try:
             # 1. News Embeddings
-            logger.info("📰 Creating news embeddings...")
-            from embeddings.embed_news_duckdb import NewsEmbeddingPipelineDuckDB
-            news_embedder = NewsEmbeddingPipelineDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                include_labels=include_labels,
-                mode=mode
-            )
-            news_result = news_embedder.process_setups(setup_ids)
-            results['news_embeddings'] = news_result
-            logger.info(f"✅ News embeddings: {'Success' if news_result else 'Failed'}")
+            if process_all or 'news' in domains:
+                logger.info("📰 Creating news embeddings...")
+                from embeddings.embed_news_duckdb import NewsEmbeddingPipelineDuckDB
+                news_embedder = NewsEmbeddingPipelineDuckDB(
+                    db_path=self.db_path,
+                    lancedb_dir=self.lancedb_dir,
+                    include_labels=include_labels,
+                    mode=mode
+                )
+                news_result = news_embedder.process_setups(setup_ids)
+                results['news_embeddings'] = news_result
+                logger.info(f"✅ News embeddings: {'Success' if news_result else 'Failed'}")
+            else:
+                results['news_embeddings'] = None
+                logger.info("⏩ Skipping news embeddings (not in selected domains)")
             
-            # 2. Fundamentals Embeddings  
-            logger.info("📊 Creating fundamentals embeddings...")
-            from embeddings.embed_fundamentals_duckdb import FundamentalsEmbedderDuckDB
-            fundamentals_embedder = FundamentalsEmbedderDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                include_labels=include_labels,
-                mode=mode
-            )
-            fundamentals_result = fundamentals_embedder.embed_fundamentals(setup_ids)
-            results['fundamentals_embeddings'] = fundamentals_result
-            logger.info(f"✅ Fundamentals embeddings: {'Success' if fundamentals_result else 'Failed'}")
+            # 2. Fundamentals Embeddings
+            if process_all or 'fundamentals' in domains:
+                logger.info("📊 Creating fundamentals embeddings...")
+                from embeddings.embed_fundamentals_duckdb import FundamentalsEmbedderDuckDB
+                fundamentals_embedder = FundamentalsEmbedderDuckDB(
+                    db_path=self.db_path,
+                    lancedb_dir=self.lancedb_dir,
+                    include_labels=include_labels,
+                    mode=mode
+                )
+                fundamentals_result = fundamentals_embedder.embed_fundamentals(setup_ids)
+                results['fundamentals_embeddings'] = fundamentals_result
+                logger.info(f"✅ Fundamentals embeddings: {'Success' if fundamentals_result else 'Failed'}")
+            else:
+                results['fundamentals_embeddings'] = None
+                logger.info("⏩ Skipping fundamentals embeddings (not in selected domains)")
             
             # 3. Analyst Recommendations Embeddings
-            logger.info("📈 Creating analyst recommendations embeddings...")
-            from embeddings.embed_analyst_recommendations_duckdb import AnalystRecommendationsEmbedderDuckDB
-            analyst_embedder = AnalystRecommendationsEmbedderDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                include_labels=include_labels,
-                mode=mode
-            )
-            analyst_result = analyst_embedder.process_setups(setup_ids)
-            results['analyst_embeddings'] = analyst_result
-            logger.info(f"✅ Analyst embeddings: {'Success' if analyst_result else 'Failed'}")
+            if process_all or 'analyst' in domains:
+                logger.info("📈 Creating analyst recommendations embeddings...")
+                from embeddings.embed_analyst_recommendations_duckdb import AnalystRecommendationsEmbedderDuckDB
+                analyst_embedder = AnalystRecommendationsEmbedderDuckDB(
+                    db_path=self.db_path,
+                    lancedb_dir=self.lancedb_dir,
+                    include_labels=include_labels,
+                    mode=mode
+                )
+                analyst_result = analyst_embedder.process_setups(setup_ids)
+                results['analyst_embeddings'] = analyst_result
+                logger.info(f"✅ Analyst embeddings: {'Success' if analyst_result else 'Failed'}")
+            else:
+                results['analyst_embeddings'] = None
+                logger.info("⏩ Skipping analyst embeddings (not in selected domains)")
             
             # 4. UserPosts Embeddings
-            logger.info("💬 Creating userposts embeddings...")
-            from embeddings.embed_userposts_duckdb import UserPostsEmbedderDuckDB
-            userposts_embedder = UserPostsEmbedderDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                include_labels=include_labels,
-                mode=mode
-            )
-            userposts_result = userposts_embedder.process_setups(setup_ids)
-            results['userposts_embeddings'] = userposts_result
-            logger.info(f"✅ UserPosts embeddings: {'Success' if userposts_result else 'Failed'}")
+            if process_all or 'userposts' in domains:
+                logger.info("💬 Creating userposts embeddings...")
+                from embeddings.embed_userposts_duckdb import UserPostsEmbedderDuckDB
+                userposts_embedder = UserPostsEmbedderDuckDB(
+                    db_path=self.db_path,
+                    lancedb_dir=self.lancedb_dir,
+                    include_labels=include_labels,
+                    mode=mode
+                )
+                userposts_result = userposts_embedder.process_setups(setup_ids)
+                results['userposts_embeddings'] = userposts_result
+                logger.info(f"✅ UserPosts embeddings: {'Success' if userposts_result else 'Failed'}")
+            else:
+                results['userposts_embeddings'] = None
+                logger.info("⏩ Skipping userposts embeddings (not in selected domains)")
             
         except Exception as e:
             logger.error(f"❌ Embedding creation failed: {e}")
@@ -156,13 +183,14 @@ class CompletePipeline:
         
         return results
         
-    def extract_features(self, setup_ids: List[str], mode: str = "training"):
+    def extract_features(self, setup_ids: List[str], mode: str = "training", domains: List[str] = ['all']):
         """
         Extract features for setup_ids
         
         Args:
             setup_ids: List of setup IDs to process
             mode: Either 'training' or 'prediction'
+            domains: List of domains to process ('all', 'news', 'fundamentals', 'analyst', 'userposts')
         
         Returns:
             Dictionary with success status for each agent
@@ -175,86 +203,103 @@ class CompletePipeline:
         
         results = {}
         similarity_predictions = {}
+        process_all = 'all' in domains
         
         # Process each setup ID
         for setup_id in setup_ids:
             similarity_predictions[setup_id] = {}
             
             # Process with news agent
-            try:
-                logger.info(f"Calling news_agent.process_setup for {setup_id}")
-                news_result = self.news_agent.process_setup(setup_id, mode)
-                logger.info(f"News result type: {type(news_result)}")
-                
-                if isinstance(news_result, tuple) and len(news_result) == 2:
-                    # Unpack features and prediction
-                    features, prediction = news_result
-                    logger.info(f"News prediction: {prediction}")
-                    similarity_predictions[setup_id]['news'] = prediction
-                else:
-                    logger.info("News agent did not return a prediction")
+            if process_all or 'news' in domains:
+                try:
+                    logger.info(f"Calling news_agent.process_setup for {setup_id}")
+                    news_result = self.news_agent.process_setup(setup_id, mode)
+                    logger.info(f"News result type: {type(news_result)}")
                     
-                results['news'] = True
-            except Exception as e:
-                logger.error(f"Error processing news for {setup_id}: {e}")
-                results['news'] = False
+                    if isinstance(news_result, tuple) and len(news_result) == 2:
+                        # Unpack features and prediction
+                        features, prediction = news_result
+                        logger.info(f"News prediction: {prediction}")
+                        similarity_predictions[setup_id]['news'] = prediction
+                    else:
+                        logger.info("News agent did not return a prediction")
+                        
+                    results['news'] = True
+                except Exception as e:
+                    logger.error(f"Error processing news for {setup_id}: {e}")
+                    results['news'] = False
+            else:
+                logger.info("⏩ Skipping news feature extraction (not in selected domains)")
+                results['news'] = None
             
             # Process with fundamentals agent
-            try:
-                logger.info(f"Calling fundamentals_agent.process_setup for {setup_id}")
-                fundamentals_result = self.fundamentals_agent.process_setup(setup_id, mode)
-                logger.info(f"Fundamentals result type: {type(fundamentals_result)}")
-                
-                if isinstance(fundamentals_result, tuple) and len(fundamentals_result) == 2:
-                    # Unpack features and prediction
-                    features, prediction = fundamentals_result
-                    logger.info(f"Fundamentals prediction: {prediction}")
-                    similarity_predictions[setup_id]['fundamentals'] = prediction
-                else:
-                    logger.info("Fundamentals agent did not return a prediction")
+            if process_all or 'fundamentals' in domains:
+                try:
+                    logger.info(f"Calling fundamentals_agent.process_setup for {setup_id}")
+                    fundamentals_result = self.fundamentals_agent.process_setup(setup_id, mode)
+                    logger.info(f"Fundamentals result type: {type(fundamentals_result)}")
                     
-                results['fundamentals'] = True
-            except Exception as e:
-                logger.error(f"Error processing fundamentals for {setup_id}: {e}")
-                results['fundamentals'] = False
+                    if isinstance(fundamentals_result, tuple) and len(fundamentals_result) == 2:
+                        # Unpack features and prediction
+                        features, prediction = fundamentals_result
+                        logger.info(f"Fundamentals prediction: {prediction}")
+                        similarity_predictions[setup_id]['fundamentals'] = prediction
+                    else:
+                        logger.info("Fundamentals agent did not return a prediction")
+                        
+                    results['fundamentals'] = True
+                except Exception as e:
+                    logger.error(f"Error processing fundamentals for {setup_id}: {e}")
+                    results['fundamentals'] = False
+            else:
+                logger.info("⏩ Skipping fundamentals feature extraction (not in selected domains)")
+                results['fundamentals'] = None
             
             # Process with analyst agent
-            try:
-                logger.info(f"Calling analyst_agent.process_setup for {setup_id}")
-                analyst_result = self.analyst_agent.process_setup(setup_id, mode)
-                logger.info(f"Analyst result type: {type(analyst_result)}")
-                
-                if isinstance(analyst_result, tuple) and len(analyst_result) == 2:
-                    # Unpack features and prediction
-                    features, prediction = analyst_result
-                    logger.info(f"Analyst prediction: {prediction}")
-                    similarity_predictions[setup_id]['analyst'] = prediction
-                else:
-                    logger.info("Analyst agent did not return a prediction")
+            if process_all or 'analyst' in domains:
+                try:
+                    logger.info(f"Calling analyst_agent.process_setup for {setup_id}")
+                    analyst_result = self.analyst_agent.process_setup(setup_id, mode)
+                    logger.info(f"Analyst result type: {type(analyst_result)}")
                     
-                results['analyst'] = True
-            except Exception as e:
-                logger.error(f"Error processing analyst recommendations for {setup_id}: {e}")
-                results['analyst'] = False
+                    if isinstance(analyst_result, tuple) and len(analyst_result) == 2:
+                        # Unpack features and prediction
+                        features, prediction = analyst_result
+                        logger.info(f"Analyst prediction: {prediction}")
+                        similarity_predictions[setup_id]['analyst'] = prediction
+                    else:
+                        logger.info("Analyst agent did not return a prediction")
+                        
+                    results['analyst'] = True
+                except Exception as e:
+                    logger.error(f"Error processing analyst recommendations for {setup_id}: {e}")
+                    results['analyst'] = False
+            else:
+                logger.info("⏩ Skipping analyst feature extraction (not in selected domains)")
+                results['analyst'] = None
             
             # Process with userposts agent
-            try:
-                logger.info(f"Calling userposts_agent.process_setup for {setup_id}")
-                userposts_result = self.userposts_agent.process_setup(setup_id, mode)
-                logger.info(f"UserPosts result type: {type(userposts_result)}")
-                
-                if isinstance(userposts_result, tuple) and len(userposts_result) == 2:
-                    # Unpack features and prediction
-                    features, prediction = userposts_result
-                    logger.info(f"UserPosts prediction: {prediction}")
-                    similarity_predictions[setup_id]['userposts'] = prediction
-                else:
-                    logger.info("UserPosts agent did not return a prediction")
+            if process_all or 'userposts' in domains:
+                try:
+                    logger.info(f"Calling userposts_agent.process_setup for {setup_id}")
+                    userposts_result = self.userposts_agent.process_setup(setup_id, mode)
+                    logger.info(f"UserPosts result type: {type(userposts_result)}")
                     
-                results['userposts'] = True
-            except Exception as e:
-                logger.error(f"Error processing user posts for {setup_id}: {e}")
-                results['userposts'] = False
+                    if isinstance(userposts_result, tuple) and len(userposts_result) == 2:
+                        # Unpack features and prediction
+                        features, prediction = userposts_result
+                        logger.info(f"UserPosts prediction: {prediction}")
+                        similarity_predictions[setup_id]['userposts'] = prediction
+                    else:
+                        logger.info("UserPosts agent did not return a prediction")
+                        
+                    results['userposts'] = True
+                except Exception as e:
+                    logger.error(f"Error processing user posts for {setup_id}: {e}")
+                    results['userposts'] = False
+            else:
+                logger.info("⏩ Skipping userposts feature extraction (not in selected domains)")
+                results['userposts'] = None
         
         # Store similarity predictions if in prediction mode
         logger.info(f"Similarity predictions: {similarity_predictions}")
@@ -368,18 +413,28 @@ class CompletePipeline:
         
         return results
     
-    def run_complete_pipeline(self, setup_ids: List[str], mode: str = 'training') -> Dict[str, Any]:
-        """Run complete pipeline: embedding creation, feature extraction, and ML feature table creation"""
+    def run_complete_pipeline(self, setup_ids: List[str], mode: str = 'training', domains: List[str] = ['all']) -> Dict[str, Any]:
+        """
+        Run complete pipeline: embedding creation, feature extraction, and ML feature table creation
+        
+        Args:
+            setup_ids: List of setup IDs to process
+            mode: Either 'training' or 'prediction'
+            domains: List of domains to process ('all', 'news', 'fundamentals', 'analyst', 'userposts')
+        
+        Returns:
+            Dictionary with results summary
+        """
         logger.info("🚀 STARTING COMPLETE PIPELINE")
         logger.info("=" * 70)
         
         start_time = datetime.now()
         
         # Step 1: Create embeddings (with proper training/prediction mode handling)
-        embedding_results = self.create_embeddings(setup_ids, mode)
+        embedding_results = self.create_embeddings(setup_ids, mode, domains)
         
         # Step 2: Extract features (with similarity enhancement in prediction mode)
-        extraction_results = self.extract_features(setup_ids, mode)
+        extraction_results = self.extract_features(setup_ids, mode, domains)
         
         # Step 3: Create ML feature tables
         ml_features_results = self.create_ml_features(setup_ids, mode)
@@ -394,6 +449,7 @@ class CompletePipeline:
             'end_time': end_time.isoformat(),
             'duration_seconds': duration,
             'setups_processed': len(setup_ids),
+            'domains_processed': domains,
             'embedding_results': embedding_results,
             'extraction_results': extraction_results,
             'ml_features_results': ml_features_results
@@ -415,6 +471,8 @@ def main():
                        help='Path to LanceDB directory')
     parser.add_argument('--step', choices=['all', 'embeddings', 'features', 'ml_tables'], default='all',
                        help='Pipeline step to run (default: all)')
+    parser.add_argument('--domains', nargs='+', choices=['all', 'news', 'fundamentals', 'analyst', 'userposts'], default=['all'],
+                       help='Domains to process (default: all)')
     
     args = parser.parse_args()
     
@@ -468,10 +526,10 @@ def main():
     start_time = datetime.now()
     
     if args.step == 'all' or args.step == 'embeddings':
-        pipeline.create_embeddings(setup_ids, mode=args.mode)
+        pipeline.create_embeddings(setup_ids, mode=args.mode, domains=args.domains)
         
     if args.step == 'all' or args.step == 'features':
-        pipeline.extract_features(setup_ids, mode=args.mode)
+        pipeline.extract_features(setup_ids, mode=args.mode, domains=args.domains)
         
     if args.step == 'all' or args.step == 'ml_tables':
         pipeline.create_ml_features(setup_ids, mode=args.mode)
@@ -483,6 +541,7 @@ def main():
     logger.info("\n🎉 Pipeline Complete!")
     logger.info(f"Step: {args.step}")
     logger.info(f"Mode: {args.mode}")
+    logger.info(f"Domains: {', '.join(args.domains)}")
     logger.info(f"Duration: {duration:.1f}s")
     logger.info(f"Setups processed: {len(setup_ids)}")
 
