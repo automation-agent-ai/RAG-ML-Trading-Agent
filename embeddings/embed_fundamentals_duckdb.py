@@ -31,30 +31,38 @@ logger = logging.getLogger(__name__)
 class FundamentalsEmbedderDuckDB:
     """DuckDB-based Fundamentals Domain Embedding Pipeline"""
     
-    def __init__(self, db_path="data/sentiment_system.duckdb", lancedb_dir="lancedb_store", 
-                 embedding_model="all-MiniLM-L6-v2", specific_setup_ids=None):
+    def __init__(self, db_path: str = "data/sentiment_system.duckdb", 
+                 lancedb_dir: str = "lancedb_store",
+                 include_labels: bool = True,
+                 mode: str = "training"):
+        """
+        Initialize Fundamentals Embedder with DuckDB backend
+        
+        Args:
+            db_path: Path to DuckDB database
+            lancedb_dir: Directory for LanceDB storage
+            include_labels: Whether to include performance labels in embeddings
+            mode: Either 'training' or 'prediction'
+        """
         self.db_path = Path(db_path)
         self.lancedb_dir = Path(lancedb_dir)
-        self.specific_setup_ids = specific_setup_ids
+        self.include_labels = include_labels
+        self.mode = mode
         
         # Initialize setup validator
         self.setup_validator = SetupValidatorDuckDB(db_path=str(self.db_path))
+        logger.info(f"Setup validator initialized with {len(self.setup_validator.confirmed_setup_ids)} confirmed setups")
         
-        # Use specific setup_ids if provided, otherwise use all confirmed setups
-        if self.specific_setup_ids:
-            self.target_setup_ids = set(self.specific_setup_ids)
-            logger.info(f"Using specific setup_ids: {self.specific_setup_ids}")
-        else:
-            self.target_setup_ids = self.setup_validator.confirmed_setup_ids
-            logger.info(f"Setup validator initialized with {len(self.setup_validator.confirmed_setup_ids)} confirmed setups")
+        # Initialize sentence transformer model
+        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("Initialized SentenceTransformer model: all-MiniLM-L6-v2")
         
-        logger.info(f"Loading embedding model: {embedding_model}")
-        self.embedding_model = SentenceTransformer(embedding_model)
+        # Initialize LanceDB
+        self.lancedb_dir.mkdir(exist_ok=True)
         self.db = lancedb.connect(str(self.lancedb_dir))
         
         # Data containers
         self.fundamentals_data = None
-        self.ratios_data = None
         self.labels_data = None
         
     def load_data(self):
@@ -69,7 +77,7 @@ class FundamentalsEmbedderDuckDB:
         all_fundamentals = []
         all_ratios = []
         
-        for setup_id in self.target_setup_ids:
+        for setup_id in self.setup_validator.confirmed_setup_ids:
             # Get fundamentals for this setup (already filtered by date)
             fundamentals = self.setup_validator.get_fundamentals_for_setup(setup_id)
             if not fundamentals.empty:
@@ -255,58 +263,53 @@ class FundamentalsEmbedderDuckDB:
         return ". ".join(summary_parts) + "."
     
     def create_records_with_labels(self, merged_df):
-        """Create embedding records with performance labels"""
-        if merged_df.empty:
-            return []
-        
+        """Create embedding records with optional labels based on mode"""
         records = []
         
-        for idx, row in merged_df.iterrows():
-            if pd.isna(row.get('ticker')) or pd.isna(row.get('period_end')):
+        for setup_id in self.setup_validator.confirmed_setup_ids:
+            if setup_id not in merged_df.index:
                 continue
             
-            setup_id = row.get('setup_id', '')
-            if not setup_id:
-                continue
+            row = merged_df.loc[setup_id]
             
+            # Create financial summary
             financial_summary = self.create_financial_summary(row)
             
             record = {
-                'id': f"{row.get('ticker', '')}_{row.get('report_type', '')}_{row.get('period_end', '')}_{setup_id}",
                 'setup_id': setup_id,
-                'ticker': str(row.get('ticker', '')),
-                'report_type': str(row.get('report_type', '')),
-                'period_end': str(row.get('period_end', '')),
+                'ticker': row.get('ticker', ''),
                 'financial_summary': financial_summary,
-                'text_length': len(financial_summary),
-                'summary_type': 'comprehensive_financial_analysis',
-                
-                # Core Metrics
-                'revenue': float(row.get('revenue', 0)) if pd.notna(row.get('revenue')) else 0,
-                'net_income': float(row.get('net_income', 0)) if pd.notna(row.get('net_income')) else 0,
-                'total_assets': float(row.get('total_assets', 0)) if pd.notna(row.get('total_assets')) else 0,
-                
-                # Key Ratios
-                'roe': float(row.get('roe', 0)) if pd.notna(row.get('roe')) else 0,
-                'roa': float(row.get('roa', 0)) if pd.notna(row.get('roa')) else 0,
-                'debt_to_equity': float(row.get('debt_to_equity', 0)) if pd.notna(row.get('debt_to_equity')) else 0,
-                'current_ratio': float(row.get('current_ratio', 0)) if pd.notna(row.get('current_ratio')) else 0,
-                'pe_ratio': float(row.get('pe_ratio', 0)) if pd.notna(row.get('pe_ratio')) else 0,
-                
+                'market_cap': float(row.get('market_cap', 0)),
+                'debt_to_equity': float(row.get('debt_to_equity', 0)),
+                'current_ratio': float(row.get('current_ratio', 0)),
+                'roa': float(row.get('roa', 0)),
+                'roe': float(row.get('roe', 0)),
+                'gross_margin_pct': float(row.get('gross_margin_pct', 0)),
+                'net_margin_pct': float(row.get('net_margin_pct', 0)),
+                'revenue_growth_pct': float(row.get('revenue_growth_pct', 0)),
                 'embedded_at': datetime.now().isoformat()
             }
             
-            # Add performance labels
-            setup_labels = self.labels_data[self.labels_data['setup_id'] == setup_id]
-            if not setup_labels.empty:
-                latest_label = setup_labels.iloc[-1]
-                record.update({
-                    'stock_return_10d': float(latest_label.get('stock_return_10d', 0)),
-                    'outperformance_10d': float(latest_label.get('outperformance_10d', 0)),
-                    'days_outperformed_10d': int(latest_label.get('days_outperformed_10d', 0)),
-                    'has_performance_labels': True
-                })
+            # Add performance labels only if in training mode
+            if self.include_labels and self.mode == "training":
+                setup_labels = self.labels_data[self.labels_data['setup_id'] == setup_id]
+                if not setup_labels.empty:
+                    latest_label = setup_labels.iloc[-1]
+                    record.update({
+                        'stock_return_10d': float(latest_label.get('stock_return_10d', 0)),
+                        'outperformance_10d': float(latest_label.get('outperformance_10d', 0)),
+                        'days_outperformed_10d': int(latest_label.get('days_outperformed_10d', 0)),
+                        'has_performance_labels': True
+                    })
+                else:
+                    record.update({
+                        'stock_return_10d': 0.0,
+                        'outperformance_10d': 0.0,
+                        'days_outperformed_10d': 0,
+                        'has_performance_labels': False
+                    })
             else:
+                # In prediction mode, don't include labels
                 record.update({
                     'stock_return_10d': 0.0,
                     'outperformance_10d': 0.0,
@@ -333,14 +336,22 @@ class FundamentalsEmbedderDuckDB:
         
         logger.info("Embeddings created successfully")
     
-    def store_in_lancedb(self, records, table_name="fundamentals_embeddings"):
-        """Store records in LanceDB"""
+    def store_in_lancedb(self, records, table_name=None):
+        """Store records in LanceDB with mode-specific table names"""
         if not records:
             logger.warning("No records to store")
             return
             
+        if table_name is None:
+            table_name = "fundamentals_embeddings_training" if self.mode == "training" else "fundamentals_embeddings_prediction"
+            
         logger.info(f"Storing {len(records)} records in LanceDB table: {table_name}")
         
+        # Only store in LanceDB if in training mode or explicitly requested
+        if self.mode != "training" and not table_name.endswith("_prediction"):
+            logger.info("Skipping LanceDB storage in prediction mode")
+            return
+
         df = pd.DataFrame(records)
         df['vector'] = df['vector'].apply(lambda x: np.array(x, dtype=np.float32))
         

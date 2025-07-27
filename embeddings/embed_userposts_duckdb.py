@@ -110,25 +110,34 @@ def chunk_post_content(content: str, max_chunk_size: int = 300, overlap: int = 5
 class UserPostsEmbedderDuckDB:
     """DuckDB-based User Posts Domain Embedding Pipeline"""
     
-    def __init__(self, db_path="data/sentiment_system.duckdb", lancedb_dir="lancedb_store", 
-                 embedding_model="all-MiniLM-L6-v2", specific_setup_ids=None):
+    def __init__(self, db_path: str = "data/sentiment_system.duckdb", 
+                 lancedb_dir: str = "lancedb_store",
+                 include_labels: bool = True,
+                 mode: str = "training"):
+        """
+        Initialize User Posts Embedder
+        
+        Args:
+            db_path: Path to DuckDB database
+            lancedb_dir: Directory for LanceDB storage
+            include_labels: Whether to include performance labels in embeddings
+            mode: Either 'training' or 'prediction'
+        """
         self.db_path = Path(db_path)
         self.lancedb_dir = Path(lancedb_dir)
-        self.specific_setup_ids = specific_setup_ids
+        self.include_labels = include_labels
+        self.mode = mode
         
         # Initialize setup validator
         self.setup_validator = SetupValidatorDuckDB(db_path=str(self.db_path))
+        logger.info(f"Setup validator initialized with {len(self.setup_validator.confirmed_setup_ids)} confirmed setups")
         
-        # Use specific setup_ids if provided, otherwise use all confirmed setups
-        if self.specific_setup_ids:
-            self.target_setup_ids = set(self.specific_setup_ids)
-            logger.info(f"Using specific setup_ids: {self.specific_setup_ids}")
-        else:
-            self.target_setup_ids = self.setup_validator.confirmed_setup_ids
-            logger.info(f"Setup validator initialized with {len(self.setup_validator.confirmed_setup_ids)} confirmed setups")
+        logger.info("Loading embedding model: all-MiniLM-L6-v2")
+        self.model = SentenceTransformer("all-MiniLM-L6-v2")
         
-        logger.info(f"Loading embedding model: {embedding_model}")
-        self.model = SentenceTransformer(embedding_model)
+        # Initialize LanceDB
+        self.lancedb_dir.mkdir(exist_ok=True)
+        self.db = lancedb.connect(str(self.lancedb_dir))
         
         # Data containers
         self.posts_data = None

@@ -34,29 +34,38 @@ logger = logging.getLogger(__name__)
 class AnalystRecommendationsEmbedderDuckDB:
     """DuckDB-based Analyst Recommendations Domain Embedding Pipeline"""
     
-    def __init__(
-        self,
-        db_path: str = "data/sentiment_system.duckdb",
-        lancedb_dir: str = "storage/lancedb_store",
-        embedding_model: str = "all-MiniLM-L6-v2"
-    ):
+    def __init__(self, db_path: str = "data/sentiment_system.duckdb", 
+                 lancedb_dir: str = "lancedb_store",
+                 include_labels: bool = True,
+                 mode: str = "training"):
+        """
+        Initialize Analyst Recommendations Embedder
+        
+        Args:
+            db_path: Path to DuckDB database
+            lancedb_dir: Directory for LanceDB storage
+            include_labels: Whether to include performance labels in embeddings
+            mode: Either 'training' or 'prediction'
+        """
         self.db_path = Path(db_path)
         self.lancedb_dir = Path(lancedb_dir)
+        self.include_labels = include_labels
+        self.mode = mode
         
         # Initialize setup validator
         self.setup_validator = SetupValidatorDuckDB(db_path=str(self.db_path))
         logger.info(f"Setup validator initialized with {len(self.setup_validator.confirmed_setup_ids)} confirmed setups")
         
-        # Initialize embedding model
-        logger.info(f"Loading embedding model: {embedding_model}")
-        self.model = SentenceTransformer(embedding_model)
+        # Initialize models
+        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        
+        # Initialize LanceDB
+        self.lancedb_dir.mkdir(exist_ok=True)
+        self.db = lancedb.connect(str(self.lancedb_dir))
         
         # Data containers
         self.analyst_data = None
         self.labels_data = None
-        
-        # Ensure LanceDB directory exists
-        self.lancedb_dir.mkdir(parents=True, exist_ok=True)
         
     def load_data(self):
         """Load analyst recommendations and labels data from DuckDB"""
@@ -141,15 +150,9 @@ class AnalystRecommendationsEmbedderDuckDB:
         
         return " | ".join(parts) if parts else f"Analyst data for {row.get('ticker', 'Unknown')}"
         
-    def process_analyst_recommendations(self) -> List[Dict[str, Any]]:
-        """Process analyst recommendations data into embeddings"""
-        if self.analyst_data is None or self.analyst_data.empty:
-            logger.warning("No analyst recommendations data to process")
-            return []
-            
-        logger.info(f"Processing {len(self.analyst_data)} analyst recommendations...")
-        
-        records = []
+    def create_embeddings_with_labels(self):
+        """Create embeddings with optional labels based on mode"""
+        embeddings_data = []
         
         for idx, row in self.analyst_data.iterrows():
             # Create comprehensive text summary
@@ -161,101 +164,85 @@ class AnalystRecommendationsEmbedderDuckDB:
             # Generate embedding
             embedding = self.model.encode(analyst_summary)
             
-            # Get performance labels for this setup
-            setup_id = row['setup_id']
-            setup_labels = self.labels_data[self.labels_data['setup_id'] == setup_id]
-            
-            if not setup_labels.empty:
-                latest_label = setup_labels.iloc[-1]
-                has_labels = True
-                stock_return = float(latest_label.get('stock_return_10d', 0))
-                outperformance = float(latest_label.get('outperformance_10d', 0))
-                days_outperformed = int(latest_label.get('days_outperformed_10d', 0))
-                benchmark_return = float(latest_label.get('benchmark_return_10d', 0))
-            else:
-                has_labels = False
-                stock_return = outperformance = benchmark_return = 0.0
-                days_outperformed = 0
-            
-            # Calculate derived metrics
-            strong_buy = row.get('strong_buy', 0) or 0
-            buy = row.get('buy', 0) or 0
-            hold = row.get('hold', 0) or 0
-            sell = row.get('sell', 0) or 0
-            strong_sell = row.get('strong_sell', 0) or 0
-            total_recs = strong_buy + buy + hold + sell + strong_sell
-            
-            buy_ratio = (strong_buy + buy) / total_recs if total_recs > 0 else 0
-            sell_ratio = (sell + strong_sell) / total_recs if total_recs > 0 else 0
-            
-            # Create record
+            # Base record without labels
             record = {
-                # Identifiers
                 'id': record_id,
-                'setup_id': setup_id,
+                'setup_id': row['setup_id'],
                 'ticker': row.get('ticker', ''),
-                'source_type': 'analyst_recommendation',
-                
-                # Content
                 'analyst_summary': analyst_summary,
-                'text_length': len(analyst_summary),
-                
-                # Recommendation counts (raw)
-                'strong_buy_count': strong_buy,
-                'buy_count': buy,
-                'hold_count': hold,
-                'sell_count': sell,
-                'strong_sell_count': strong_sell,
-                'total_recommendations': total_recs,
-                
-                # Derived metrics
-                'buy_ratio': buy_ratio,
-                'sell_ratio': sell_ratio,
-                'hold_ratio': hold / total_recs if total_recs > 0 else 0,
-                'mean_rating': float(row.get('mean_rating', 0)) if pd.notna(row.get('mean_rating')) else 0.0,
-                
-                # Metadata
-                'period': row.get('period', ''),
-                'setup_date': row.get('setup_date', '').strftime('%Y-%m-%d') if pd.notna(row.get('setup_date')) else '',
-                'created_at': row.get('created_at', '').strftime('%Y-%m-%d %H:%M:%S') if pd.notna(row.get('created_at')) else '',
-                
-                # Performance labels
-                'has_performance_labels': has_labels,
-                'stock_return_10d': stock_return,
-                'benchmark_return_10d': benchmark_return,
-                'outperformance_10d': outperformance,
-                'days_outperformed_10d': days_outperformed,
-                
-                # Embedding and metadata
                 'vector': embedding.tolist(),
-                'embedded_at': datetime.now().isoformat()
+                'embedded_at': datetime.now().isoformat(),
+                'strong_buy': row.get('strong_buy', 0) or 0,
+                'buy': row.get('buy', 0) or 0,
+                'hold': row.get('hold', 0) or 0,
+                'sell': row.get('sell', 0) or 0,
+                'strong_sell': row.get('strong_sell', 0) or 0,
+                'mean_target_price': float(row.get('mean_target_price', 0)) if pd.notna(row.get('mean_target_price')) else 0,
+                'mean_recommendation': float(row.get('mean_recommendation', 0)) if pd.notna(row.get('mean_recommendation')) else 0
             }
             
-            records.append(record)
-                    
-        logger.info(f"Created embeddings for {len(records)} analyst recommendations")
-        return records
-        
-    def store_in_lancedb(self, records: List[Dict[str, Any]], table_name: str = "analyst_recommendations_embeddings") -> None:
-        """Store embeddings in LanceDB"""
-        if not records:
-            logger.warning("No records to store")
-            return
+            # Add performance labels only if in training mode
+            if self.include_labels and self.mode == "training":
+                setup_id = row['setup_id']
+                setup_labels = self.labels_data[self.labels_data['setup_id'] == setup_id]
+                
+                if not setup_labels.empty:
+                    latest_label = setup_labels.iloc[-1]
+                    record.update({
+                        'stock_return_10d': float(latest_label.get('stock_return_10d', 0)),
+                        'outperformance_10d': float(latest_label.get('outperformance_10d', 0)),
+                        'days_outperformed_10d': int(latest_label.get('days_outperformed_10d', 0)),
+                        'benchmark_return_10d': float(latest_label.get('benchmark_return_10d', 0)),
+                        'has_performance_labels': True
+                    })
+                else:
+                    record.update({
+                        'stock_return_10d': 0.0,
+                        'outperformance_10d': 0.0,
+                        'days_outperformed_10d': 0,
+                        'benchmark_return_10d': 0.0,
+                        'has_performance_labels': False
+                    })
+            else:
+                # In prediction mode, don't include labels
+                record.update({
+                    'stock_return_10d': 0.0,
+                    'outperformance_10d': 0.0,
+                    'days_outperformed_10d': 0,
+                    'benchmark_return_10d': 0.0,
+                    'has_performance_labels': False
+                })
             
-        logger.info(f"Storing {len(records)} records in LanceDB")
+            embeddings_data.append(record)
         
-        # Connect to LanceDB
-        db = lancedb.connect(str(self.lancedb_dir))
+        logger.info(f"Created {len(embeddings_data)} analyst recommendation embeddings")
+        return embeddings_data
+
+    def store_embeddings(self, embeddings_data, table_name=None):
+        """Store embeddings in LanceDB with mode-specific table names"""
+        if not embeddings_data:
+            logger.warning("No embeddings to store")
+            return
         
+        if table_name is None:
+            table_name = "analyst_embeddings_training" if self.mode == "training" else "analyst_embeddings_prediction"
+        
+        logger.info(f"Storing {len(embeddings_data)} embeddings in table: {table_name}")
+        
+        # Only store in LanceDB if in training mode or explicitly requested
+        if self.mode != "training" and not table_name.endswith("_prediction"):
+            logger.info("Skipping LanceDB storage in prediction mode")
+            return
+
         # Drop existing table if it exists
         try:
-            db.drop_table(table_name)
+            self.db.drop_table(table_name)
             logger.info(f"Dropped existing table: {table_name}")
         except Exception:
             pass
             
         # Create DataFrame
-        df = pd.DataFrame(records)
+        df = pd.DataFrame(embeddings_data)
         df['vector'] = df['vector'].apply(lambda x: np.array(x, dtype=np.float32))
         
         # Handle data types
@@ -264,12 +251,12 @@ class AnalystRecommendationsEmbedderDuckDB:
                 df[col] = df[col].astype(str).replace('nan', '')
                 
         # Create table
-        table = db.create_table(table_name, df)
+        table = self.db.create_table(table_name, df)
         logger.info(f"Created LanceDB table '{table_name}' with {len(table)} records")
         
         # Verify the table
-        if len(records) > 0:
-            sample_query = table.search(records[0]['vector']).limit(3).to_pandas()
+        if len(embeddings_data) > 0:
+            sample_query = table.search(embeddings_data[0]['vector']).limit(3).to_pandas()
             logger.info(f"Table verification: Retrieved {len(sample_query)} sample records")
         
     def run_pipeline(self):
@@ -277,15 +264,15 @@ class AnalystRecommendationsEmbedderDuckDB:
         logger.info("Starting DuckDB-based Analyst Recommendations Embedding Pipeline")
         
         self.load_data()
-        records = self.process_analyst_recommendations()
-        self.store_in_lancedb(records)
+        embeddings_data = self.create_embeddings_with_labels()
+        self.store_embeddings(embeddings_data)
         
         # Summary
         logger.info("Pipeline Summary:")
-        logger.info(f"  Total records: {len(records)}")
-        logger.info(f"  With performance labels: {len([r for r in records if r.get('has_performance_labels')])}")
-        logger.info(f"  Unique setups: {len(set(r['setup_id'] for r in records))}")
-        logger.info(f"  Unique tickers: {len(set(r['ticker'] for r in records))}")
+        logger.info(f"  Total records: {len(embeddings_data)}")
+        logger.info(f"  With performance labels: {len([r for r in embeddings_data if r.get('has_performance_labels')])}")
+        logger.info(f"  Unique setups: {len(set(r['setup_id'] for r in embeddings_data))}")
+        logger.info(f"  Unique tickers: {len(set(r['ticker'] for r in embeddings_data))}")
         
         # Close DuckDB connection
         self.setup_validator.close()

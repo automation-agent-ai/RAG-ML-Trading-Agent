@@ -27,6 +27,7 @@ import pandas as pd
 from pydantic import BaseModel, Field, ValidationError
 from sentence_transformers import SentenceTransformer
 from openai import OpenAI
+import numpy as np
 
 # Import from existing modules
 import sys
@@ -38,6 +39,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
+from embeddings.embed_news_duckdb import NewsEmbeddingPipelineDuckDB
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -336,6 +338,15 @@ class EnhancedNewsAgentDuckDB:
         self._connect_to_lancedb()
         self._init_duckdb_feature_storage()
         
+        # Initialize training table for similarity search
+        self.training_table = None
+        try:
+            if hasattr(self, 'db') and self.db:
+                self.training_table = self.db.open_table("news_embeddings_training")
+                logger.info("Connected to news_embeddings_training table for similarity search")
+        except Exception as e:
+            logger.warning(f"Could not open training embeddings table: {e}")
+        
         logger.info("Enhanced News Agent (DuckDB) initialized successfully")
     
     def _connect_to_lancedb(self):
@@ -539,20 +550,125 @@ class EnhancedNewsAgentDuckDB:
         
         return groups
     
-    def extract_group_features(self, group_name: str, news_items: List[Dict]) -> Dict[str, Any]:
-        """Extract features for a single news group using LLM"""
+    def find_similar_training_embeddings(self, query_embedding: np.ndarray, limit: int = 10) -> List[Dict]:
+        """Find similar training embeddings with labels"""
+        if self.training_table is None:
+            logger.warning("Training embeddings table not available")
+            return []
+        
+        try:
+            results = self.training_table.search(query_embedding).limit(limit).to_pandas()
+            return results.to_dict('records')
+        except Exception as e:
+            logger.error(f"Error searching similar embeddings: {e}")
+            return []
+    
+    def compute_similarity_features(self, similar_cases: List[Dict]) -> Dict[str, float]:
+        """Compute similarity-based features from similar cases"""
+        if not similar_cases:
+            return {
+                'positive_signal_strength': 0.0,
+                'negative_risk_score': 0.0,
+                'neutral_probability': 0.0,
+                'historical_pattern_confidence': 0.0,
+                'similar_cases_count': 0
+            }
+        
+        # Calculate performance-based features
+        positive_cases = [c for c in similar_cases if c.get('outperformance_10d', 0) > 0.02]  # 2% threshold
+        negative_cases = [c for c in similar_cases if c.get('outperformance_10d', 0) < -0.02]
+        neutral_cases = [c for c in similar_cases if abs(c.get('outperformance_10d', 0)) <= 0.02]
+        
+        total_cases = len(similar_cases)
+        
+        # Calculate weighted features based on similarity scores
+        similarity_scores = [c.get('_distance', 1.0) for c in similar_cases]  # Lower distance = higher similarity
+        max_distance = max(similarity_scores)
+        similarity_weights = [1 - (score / max_distance) for score in similarity_scores]
+        
+        # Calculate weighted ratios
+        positive_ratio = sum(w for c, w in zip(similar_cases, similarity_weights) 
+                           if c.get('outperformance_10d', 0) > 0.02) / sum(similarity_weights)
+        
+        negative_ratio = sum(w for c, w in zip(similar_cases, similarity_weights)
+                           if c.get('outperformance_10d', 0) < -0.02) / sum(similarity_weights)
+        
+        # Calculate pattern confidence based on consistency
+        performance_std = np.std([c.get('outperformance_10d', 0) for c in similar_cases])
+        pattern_confidence = 1.0 / (1.0 + performance_std)  # Higher std = lower confidence
+        
+        return {
+            'positive_signal_strength': float(positive_ratio),
+            'negative_risk_score': float(negative_ratio),
+            'neutral_probability': float(len(neutral_cases) / total_cases),
+            'historical_pattern_confidence': float(pattern_confidence),
+            'similar_cases_count': total_cases
+        }
+    
+    def predict_via_similarity(self, setup_id: str, content: str) -> Dict[str, Any]:
+        """Direct prediction using similarity to training embeddings"""
+        # Create embedding for prediction
+        embedder = NewsEmbeddingPipelineDuckDB(
+            db_path=str(self.db_path),
+            lancedb_dir=str(self.lancedb_dir),
+            include_labels=False,
+            mode="prediction"
+        )
+        
+        # Create temporary record for embedding
+        record = {
+            'setup_id': setup_id,
+            'chunk_text': content,
+            'text_length': len(content)
+        }
+        
+        # Create embedding
+        records = embedder.create_embeddings([record])
+        if not records:
+            logger.error("Failed to create embedding for prediction")
+            return {}
+            
+        query_embedding = np.array(records[0]['vector'])
+        
+        # Find similar cases
+        similar_cases = self.find_similar_training_embeddings(query_embedding, limit=10)
+        
+        if not similar_cases:
+            logger.warning("No similar cases found for prediction")
+            return {}
+            
+        # Extract labels from similar cases
+        similar_labels = [case.get('outperformance_10d', 0.0) for case in similar_cases]
+        
+        # Compute weighted average prediction
+        similarity_scores = [1 - case.get('_distance', 1.0) for case in similar_cases]
+        weighted_prediction = np.average(similar_labels, weights=similarity_scores)
+        
+        # Compute confidence metrics
+        prediction = {
+            'predicted_outperformance': float(weighted_prediction),
+            'confidence': float(1.0 / (1.0 + np.std(similar_labels))),
+            'positive_ratio': sum(1 for l in similar_labels if l > 0.02) / len(similar_labels),
+            'negative_ratio': sum(1 for l in similar_labels if l < -0.02) / len(similar_labels),
+            'neutral_ratio': sum(1 for l in similar_labels if abs(l) <= 0.02) / len(similar_labels),
+            'similar_cases_count': len(similar_cases)
+        }
+        
+        return prediction
+
+    def extract_group_features(self, group_name: str, news_items: List[Dict], mode: str = "training") -> Dict[str, Any]:
+        """Extract features for a single news group using LLM and similarity search"""
         if not news_items:
-            # Return default/empty features for empty groups
             return self._get_default_group_features(group_name)
         
         # Handle large groups by chunking
         if len(news_items) > self.max_group_size:
-            return self._extract_large_group_features(group_name, news_items)
+            return self._extract_large_group_features(group_name, news_items, mode)
         else:
-            return self._extract_single_group_features(group_name, news_items)
+            return self._extract_single_group_features(group_name, news_items, mode)
     
-    def _extract_single_group_features(self, group_name: str, news_items: List[Dict]) -> Dict[str, Any]:
-        """Extract features for a group that fits in one LLM call"""
+    def _extract_single_group_features(self, group_name: str, news_items: List[Dict], mode: str = "training") -> Dict[str, Any]:
+        """Extract features for a group that fits in one LLM call with optional similarity enhancement"""
         
         # Prepare context for LLM
         context = self._prepare_group_context(news_items)
@@ -581,6 +697,11 @@ class EnhancedNewsAgentDuckDB:
             # Add metadata
             features['count'] = len(news_items)
             
+            # In prediction mode, enhance with similarity features
+            if mode == "prediction" and self.training_table is not None:
+                similarity_features = self._compute_group_similarity_features(group_name, news_items)
+                features.update(similarity_features)
+            
             return features
             
         except json.JSONDecodeError as e:
@@ -591,7 +712,7 @@ class EnhancedNewsAgentDuckDB:
             logger.error(f"Error extracting features for {group_name}: {e}")
             return self._get_default_group_features(group_name)
     
-    def _extract_large_group_features(self, group_name: str, news_items: List[Dict]) -> Dict[str, Any]:
+    def _extract_large_group_features(self, group_name: str, news_items: List[Dict], mode: str = "training") -> Dict[str, Any]:
         """Extract features for large groups using chunking and aggregation"""
         
         # Split into chunks
@@ -603,7 +724,7 @@ class EnhancedNewsAgentDuckDB:
         # Process each chunk
         for i, chunk in enumerate(chunks):
             logger.info(f"Processing {group_name} chunk {i+1}/{len(chunks)} ({len(chunk)} items)")
-            features = self._extract_single_group_features(group_name, chunk)
+            features = self._extract_single_group_features(group_name, chunk, mode)
             chunk_features.append(features)
         
         # Aggregate chunk features
@@ -868,12 +989,54 @@ Extract the features as JSON:"""
         finally:
             conn.close()
     
-    def process_setup(self, setup_id: str) -> Optional[NewsFeatureSchema]:
+    def _compute_group_similarity_features(self, group_name: str, news_items: List[Dict]) -> Dict[str, Any]:
+        """Compute similarity-based features for a news group"""
+        if not news_items or not self.training_table:
+            return {}
+        
+        # Create embeddings for news items
+        embedder = NewsEmbeddingPipelineDuckDB(
+            db_path=str(self.db_path),
+            lancedb_dir=str(self.lancedb_dir),
+            include_labels=False,
+            mode="prediction"
+        )
+        
+        all_similarity_features = []
+        
+        for item in news_items:
+            # Create temporary record for embedding
+            record = {
+                'setup_id': item.get('setup_id', ''),
+                'chunk_text': item.get('content', ''),
+                'text_length': len(item.get('content', ''))
+            }
+            
+            # Create embedding
+            embedded_records = embedder.create_embeddings([record])
+            if embedded_records:
+                query_embedding = np.array(embedded_records[0]['vector'])
+                similar_cases = self.find_similar_training_embeddings(query_embedding)
+                similarity_features = self.compute_similarity_features(similar_cases)
+                all_similarity_features.append(similarity_features)
+        
+        # Aggregate similarity features
+        if all_similarity_features:
+            aggregated = {}
+            for key in all_similarity_features[0].keys():
+                values = [f[key] for f in all_similarity_features]
+                aggregated[f"{group_name}_similarity_{key}"] = float(np.mean(values))
+            return aggregated
+        
+        return {}
+
+    def process_setup(self, setup_id: str, mode: str = "training") -> Optional[NewsFeatureSchema]:
         """
         Complete pipeline: retrieve, classify, group, extract features, and store
         
         Args:
             setup_id: Trading setup identifier
+            mode: Either 'training' or 'prediction'
             
         Returns:
             Extracted news features or None if processing failed
@@ -900,7 +1063,7 @@ Extract the features as JSON:"""
             group_items = news_groups.get(group_name, [])
             logger.info(f"Processing {group_name}: {len(group_items)} items")
             
-            group_features = self.extract_group_features(group_name, group_items)
+            group_features = self.extract_group_features(group_name, group_items, mode)
             all_group_features[group_name] = group_features
         
         # Step 5: Create global explanation

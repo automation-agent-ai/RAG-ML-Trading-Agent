@@ -60,7 +60,9 @@ class NewsEmbeddingPipelineDuckDB:
         lancedb_dir: str = "lancedb_store",
         embedding_model: str = "all-MiniLM-L6-v2",
         max_chunk_size: int = 512,
-        chunk_overlap: int = 50
+        chunk_overlap: int = 50,
+        include_labels: bool = True,  # New parameter
+        mode: str = "training"  # New parameter
     ):
         """
         Initialize the News Embedding Pipeline
@@ -71,11 +73,15 @@ class NewsEmbeddingPipelineDuckDB:
             embedding_model: HuggingFace model for embeddings
             max_chunk_size: Maximum tokens per text chunk
             chunk_overlap: Overlap between consecutive chunks
+            include_labels: Whether to include performance labels in embeddings
+            mode: Either 'training' or 'prediction'
         """
         self.db_path = Path(db_path)
         self.lancedb_dir = Path(lancedb_dir)
         self.max_chunk_size = max_chunk_size
         self.chunk_overlap = chunk_overlap
+        self.include_labels = include_labels
+        self.mode = mode
         
         # Initialize setup validator
         self.setup_validator = SetupValidatorDuckDB(db_path=str(self.db_path))
@@ -324,7 +330,11 @@ class NewsEmbeddingPipelineDuckDB:
         return processed_records
     
     def enrich_with_labels(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Enrich records with label information"""
+        """Enrich records with performance labels if in training mode"""
+        if not self.include_labels or self.mode != "training":
+            print("Skipping label enrichment (prediction mode or labels disabled)")
+            return records
+        
         if self.labels_data is None or self.labels_data.empty:
             print("No labels data available for enrichment")
             return records
@@ -391,14 +401,22 @@ class NewsEmbeddingPipelineDuckDB:
         print("Embeddings created successfully")
         return records
     
-    def store_in_lancedb(self, records: List[Dict[str, Any]], table_name: str = "news_embeddings") -> None:
+    def store_in_lancedb(self, records: List[Dict[str, Any]], table_name: str = None) -> None:
         """Store embeddings in LanceDB"""
         if not records:
             print("No records to store")
             return
+            
+        if table_name is None:
+            table_name = "news_embeddings_training" if self.mode == "training" else "news_embeddings_prediction"
         
         print(f"Storing {len(records)} records in LanceDB table: {table_name}")
         
+        # Only store in LanceDB if in training mode or explicitly requested
+        if self.mode != "training" and not table_name.endswith("_prediction"):
+            print("Skipping LanceDB storage in prediction mode")
+            return
+
         # Convert to DataFrame
         df = pd.DataFrame(records)
         
