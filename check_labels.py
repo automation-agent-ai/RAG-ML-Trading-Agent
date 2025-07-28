@@ -70,8 +70,8 @@ def main():
     # Sort by modification time (newest first)
     csv_files.sort(key=os.path.getmtime, reverse=True)
     
-    # Check the first 4 files
-    for file_path in csv_files[:4]:
+    # Check all files
+    for file_path in csv_files:
         check_labels(file_path)
 
 if __name__ == '__main__':

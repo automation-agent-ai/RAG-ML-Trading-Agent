@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-Ensemble Domain Predictions
+Ensemble Domain-Specific Model Predictions
 
-This script combines predictions from text and financial models to create ensemble predictions.
+This script combines predictions from text and financial domain models
+to make ensemble predictions.
 
 Usage:
-    python ensemble_domain_predictions.py --text-models models/text --financial-models models/financial --test-data data/ml_features/text_ml_features_prediction_*.csv --financial-test-data data/ml_features/financial_ml_features_prediction_*.csv --output ensemble_predictions.csv
+    python ensemble_domain_predictions.py --text-data data/ml_features/text_ml_features_prediction_labeled.csv 
+                                         --financial-data data/ml_features/financial_ml_features_prediction_labeled.csv 
+                                         --text-models-dir models/text 
+                                         --financial-models-dir models/financial 
+                                         --output-file data/ensemble_predictions.csv
 """
 
 import os
@@ -15,8 +20,7 @@ import logging
 import pandas as pd
 import numpy as np
 import pickle
-import matplotlib.pyplot as plt
-import seaborn as sns
+import glob
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
@@ -29,459 +33,366 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class EnsemblePredictor:
-    """Class for ensembling predictions from different domains"""
+class DomainEnsembler:
+    """Class for ensembling domain-specific model predictions"""
     
     def __init__(
         self,
-        output_dir: str = "ensemble",
-        ensemble_method: str = "voting"
+        text_models_dir: str = "models/text",
+        financial_models_dir: str = "models/financial",
+        ensemble_method: str = "weighted_voting"
     ):
         """
-        Initialize the ensemble predictor
+        Initialize the ensembler
         
         Args:
-            output_dir: Directory to save ensemble results
-            ensemble_method: Method for ensembling ('voting' or 'stacking')
+            text_models_dir: Directory containing text models
+            financial_models_dir: Directory containing financial models
+            ensemble_method: Method for ensembling predictions
+                - 'majority_voting': Simple majority voting
+                - 'weighted_voting': Weighted voting based on model performance
         """
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True, parents=True)
+        self.text_models_dir = Path(text_models_dir)
+        self.financial_models_dir = Path(financial_models_dir)
         self.ensemble_method = ensemble_method
-        self.domain_models = {}
-        self.domain_predictions = {}
-        self.ensemble_predictions = None
+        self.text_models = {}
+        self.financial_models = {}
+        self.text_weights = {}
+        self.financial_weights = {}
     
-    def load_models(self, domain: str, model_dir: str, model_types: List[str] = None) -> Dict[str, Any]:
+    def load_latest_models(self):
         """
-        Load trained models for a domain
-        
-        Args:
-            domain: Domain name ('text' or 'financial')
-            model_dir: Directory containing trained models
-            model_types: Types of models to load ('random_forest', 'xgboost', 'logistic_regression')
-            
-        Returns:
-            Dictionary of loaded models
+        Load the latest trained models from each domain
         """
-        if model_types is None:
-            model_types = ['random_forest', 'xgboost', 'logistic_regression']
+        # Load text models
+        self._load_domain_models(self.text_models_dir, self.text_models)
         
-        domain_models = {}
+        # Load financial models
+        self._load_domain_models(self.financial_models_dir, self.financial_models)
         
-        # Find model files
-        model_dir_path = Path(model_dir)
-        for model_type in model_types:
-            model_type_dir = model_dir_path / model_type
-            if not model_type_dir.exists():
-                logger.warning(f"Model directory {model_type_dir} not found")
-                continue
+        # Log loaded models
+        logger.info(f"Loaded {len(self.text_models)} text models and {len(self.financial_models)} financial models")
+    
+    def _load_domain_models(self, models_dir: Path, models_dict: Dict):
+        """Helper to load models from a domain directory"""
+        # Get model subdirectories
+        model_dirs = [d for d in models_dir.glob("*") if d.is_dir()]
+        
+        for model_dir in model_dirs:
+            model_name = model_dir.name
             
             # Find the latest model file
-            model_files = list(model_type_dir.glob(f"{model_type}_*.pkl"))
+            model_files = list(model_dir.glob("*.pkl"))
             if not model_files:
-                logger.warning(f"No model files found in {model_type_dir}")
+                logger.warning(f"No model files found in {model_dir}")
                 continue
             
             # Sort by modification time (newest first)
-            model_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            model_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
             latest_model_file = model_files[0]
             
             # Load the model
-            with open(latest_model_file, 'rb') as f:
-                model = pickle.load(f)
-            
-            domain_models[model_type] = model
-            logger.info(f"Loaded {domain} {model_type} model from {latest_model_file}")
+            try:
+                with open(latest_model_file, 'rb') as f:
+                    model = pickle.load(f)
+                models_dict[model_name] = model
+                logger.info(f"Loaded {model_name} model from {latest_model_file}")
+            except Exception as e:
+                logger.error(f"Error loading model {model_name}: {e}")
+    
+    def set_model_weights(self, text_weights: Dict[str, float] = None, financial_weights: Dict[str, float] = None):
+        """
+        Set weights for models in each domain
         
-        if not domain_models:
-            logger.warning(f"No models loaded for {domain}")
+        Args:
+            text_weights: Dictionary mapping text model names to weights
+            financial_weights: Dictionary mapping financial model names to weights
+        """
+        if text_weights:
+            self.text_weights = text_weights
+        else:
+            # Equal weights by default
+            self.text_weights = {name: 1.0 for name in self.text_models}
         
-        self.domain_models[domain] = domain_models
-        return domain_models
+        if financial_weights:
+            self.financial_weights = financial_weights
+        else:
+            # Equal weights by default
+            self.financial_weights = {name: 1.0 for name in self.financial_models}
     
     def predict(
         self,
-        domain: str,
-        X: pd.DataFrame,
-        setup_ids: pd.Series = None
-    ) -> Dict[str, np.ndarray]:
-        """
-        Make predictions for a domain
-        
-        Args:
-            domain: Domain name ('text' or 'financial')
-            X: Feature DataFrame
-            setup_ids: Setup IDs (optional)
-            
-        Returns:
-            Dictionary of predictions for each model
-        """
-        if domain not in self.domain_models:
-            raise ValueError(f"No models loaded for {domain}")
-        
-        domain_predictions = {}
-        
-        for model_type, model in self.domain_models[domain].items():
-            # Make predictions
-            y_pred = model.predict(X)
-            y_pred_proba = None
-            
-            # Get prediction probabilities if available
-            if hasattr(model, 'predict_proba'):
-                try:
-                    y_pred_proba = model.predict_proba(X)
-                except:
-                    pass
-            
-            domain_predictions[model_type] = {
-                'predictions': y_pred,
-                'probabilities': y_pred_proba
-            }
-            
-            logger.info(f"Made predictions with {domain} {model_type} model")
-        
-        self.domain_predictions[domain] = domain_predictions
-        return domain_predictions
-    
-    def ensemble_predictions(
-        self,
-        setup_ids: pd.Series,
-        method: str = None,
-        weights: Dict[str, Dict[str, float]] = None
+        text_data: pd.DataFrame,
+        financial_data: pd.DataFrame,
+        exclude_cols: List[str] = None
     ) -> pd.DataFrame:
         """
-        Ensemble predictions from different domains
+        Make ensemble predictions using text and financial models
         
         Args:
-            setup_ids: Setup IDs
-            method: Ensemble method ('voting' or 'stacking')
-            weights: Dictionary of weights for each domain and model
+            text_data: DataFrame with text features
+            financial_data: DataFrame with financial features
+            exclude_cols: Columns to exclude from features
             
         Returns:
             DataFrame with ensemble predictions
         """
-        if method is None:
-            method = self.ensemble_method
+        if exclude_cols is None:
+            exclude_cols = []
         
-        if not self.domain_predictions:
-            raise ValueError("No predictions to ensemble")
+        # Get setup IDs
+        text_setup_ids = text_data['setup_id'].tolist()
+        financial_setup_ids = financial_data['setup_id'].tolist()
         
-        # Default weights (equal weighting)
-        if weights is None:
-            weights = {}
-            for domain in self.domain_predictions:
-                weights[domain] = {}
-                for model_type in self.domain_predictions[domain]:
-                    weights[domain][model_type] = 1.0
+        # Check that the setup IDs match
+        if set(text_setup_ids) != set(financial_setup_ids):
+            logger.warning("Text and financial data have different setup IDs")
+            # Use intersection of setup IDs
+            common_setup_ids = set(text_setup_ids).intersection(set(financial_setup_ids))
+            text_data = text_data[text_data['setup_id'].isin(common_setup_ids)]
+            financial_data = financial_data[financial_data['setup_id'].isin(common_setup_ids)]
+            logger.info(f"Using {len(common_setup_ids)} common setup IDs")
         
-        # Create a DataFrame to store all predictions
-        all_predictions = pd.DataFrame({'setup_id': setup_ids})
-        
-        # Add individual model predictions to the DataFrame
-        for domain in self.domain_predictions:
-            for model_type, preds in self.domain_predictions[domain].items():
-                col_name = f"{domain}_{model_type}"
-                all_predictions[col_name] = preds['predictions']
-        
-        # Perform ensembling
-        if method == 'voting':
-            # Majority voting
-            # Count votes for each class
-            class_counts = {}
-            for domain in self.domain_predictions:
-                for model_type, preds in self.domain_predictions[domain].items():
-                    weight = weights.get(domain, {}).get(model_type, 1.0)
-                    for i, pred in enumerate(preds['predictions']):
-                        if i not in class_counts:
-                            class_counts[i] = {}
-                        if pred not in class_counts[i]:
-                            class_counts[i][pred] = 0
-                        class_counts[i][pred] += weight
-            
-            # Get majority class for each sample
-            ensemble_preds = []
-            for i in range(len(setup_ids)):
-                if i in class_counts:
-                    # Get class with highest vote count
-                    majority_class = max(class_counts[i].items(), key=lambda x: x[1])[0]
-                    ensemble_preds.append(majority_class)
-                else:
-                    ensemble_preds.append(None)
-            
-            all_predictions['ensemble_prediction'] = ensemble_preds
-        
-        elif method == 'stacking':
-            # Simple averaging of predictions (weighted)
-            # This is a simplified version of stacking
-            # For true stacking, we would need to train a meta-model
-            
-            # Get unique classes
-            all_classes = set()
-            for domain in self.domain_predictions:
-                for model_type, preds in self.domain_predictions[domain].items():
-                    all_classes.update(np.unique(preds['predictions']))
-            
-            # Convert to list and sort
-            all_classes = sorted(list(all_classes))
-            
-            # Initialize class probabilities
-            class_probs = {cls: np.zeros(len(setup_ids)) for cls in all_classes}
-            total_weights = np.zeros(len(setup_ids))
-            
-            # Sum weighted probabilities
-            for domain in self.domain_predictions:
-                for model_type, preds in self.domain_predictions[domain].items():
-                    weight = weights.get(domain, {}).get(model_type, 1.0)
-                    for i, pred in enumerate(preds['predictions']):
-                        class_probs[pred][i] += weight
-                        total_weights[i] += weight
-            
-            # Normalize probabilities
-            for cls in all_classes:
-                class_probs[cls] = np.divide(class_probs[cls], total_weights, where=total_weights!=0)
-            
-            # Get class with highest probability for each sample
-            ensemble_preds = []
-            for i in range(len(setup_ids)):
-                max_prob = -1
-                max_class = None
-                for cls in all_classes:
-                    if class_probs[cls][i] > max_prob:
-                        max_prob = class_probs[cls][i]
-                        max_class = cls
-                ensemble_preds.append(max_class)
-            
-            all_predictions['ensemble_prediction'] = ensemble_preds
-        
+        # Get true labels if available
+        if 'label' in text_data.columns:
+            true_labels = text_data['label'].tolist()
         else:
-            raise ValueError(f"Unknown ensemble method: {method}")
+            true_labels = None
         
-        self.ensemble_predictions = all_predictions
-        return all_predictions
+        # Prepare features
+        exclude_cols = exclude_cols + ['setup_id', 'label']
+        
+        # Make sure outperformance_10d is present (models expect it)
+        if 'outperformance_10d' in text_data.columns:
+            text_features = text_data.drop(columns=exclude_cols + ['outperformance_10d'], errors='ignore')
+        else:
+            # Add dummy outperformance_10d column filled with zeros
+            text_features = text_data.drop(columns=exclude_cols, errors='ignore').copy()
+            text_features['outperformance_10d'] = 0.0
+            
+        if 'outperformance_10d' in financial_data.columns:
+            financial_features = financial_data.drop(columns=exclude_cols + ['outperformance_10d'], errors='ignore')
+        else:
+            # Add dummy outperformance_10d column filled with zeros
+            financial_features = financial_data.drop(columns=exclude_cols, errors='ignore').copy()
+            financial_features['outperformance_10d'] = 0.0
+        
+        # Make predictions with each model
+        text_predictions = {}
+        financial_predictions = {}
+        
+        # Text model predictions
+        for model_name, model in self.text_models.items():
+            try:
+                preds = model.predict(text_features)
+                text_predictions[model_name] = preds
+                logger.info(f"Made predictions with {model_name} text model")
+            except Exception as e:
+                logger.error(f"Error making predictions with {model_name} text model: {e}")
+        
+        # Financial model predictions
+        for model_name, model in self.financial_models.items():
+            try:
+                preds = model.predict(financial_features)
+                financial_predictions[model_name] = preds
+                logger.info(f"Made predictions with {model_name} financial model")
+            except Exception as e:
+                logger.error(f"Error making predictions with {model_name} financial model: {e}")
+        
+        # Ensemble predictions
+        if self.ensemble_method == 'majority_voting':
+            ensemble_preds = self._majority_voting(text_predictions, financial_predictions)
+        elif self.ensemble_method == 'weighted_voting':
+            ensemble_preds = self._weighted_voting(text_predictions, financial_predictions)
+        else:
+            logger.error(f"Unknown ensemble method: {self.ensemble_method}")
+            ensemble_preds = self._majority_voting(text_predictions, financial_predictions)
+        
+        # Create results DataFrame
+        results = pd.DataFrame({
+            'setup_id': text_data['setup_id'].tolist(),
+            'ensemble_prediction': ensemble_preds
+        })
+        
+        # Add individual model predictions
+        for model_name, preds in text_predictions.items():
+            results[f'text_{model_name}_prediction'] = preds
+        
+        for model_name, preds in financial_predictions.items():
+            results[f'financial_{model_name}_prediction'] = preds
+        
+        # Add true labels if available
+        if true_labels is not None:
+            results['true_label'] = true_labels
+        
+        # Evaluate ensemble predictions if true labels are available
+        if true_labels is not None:
+            accuracy = accuracy_score(true_labels, ensemble_preds)
+            precision = precision_score(true_labels, ensemble_preds, average='weighted')
+            recall = recall_score(true_labels, ensemble_preds, average='weighted')
+            f1 = f1_score(true_labels, ensemble_preds, average='weighted')
+            
+            logger.info(f"Ensemble Accuracy: {accuracy:.4f}")
+            logger.info(f"Ensemble Precision: {precision:.4f}")
+            logger.info(f"Ensemble Recall: {recall:.4f}")
+            logger.info(f"Ensemble F1 Score: {f1:.4f}")
+            
+            # Add evaluation metrics to results
+            results_metrics = pd.DataFrame({
+                'metric': ['accuracy', 'precision', 'recall', 'f1'],
+                'value': [accuracy, precision, recall, f1]
+            })
+            
+            # Save metrics to CSV
+            metrics_file = Path('data') / f'ensemble_predictions_metrics.csv'
+            results_metrics.to_csv(metrics_file, index=False)
+            logger.info(f"Saved ensemble metrics to {metrics_file}")
+        
+        return results
     
-    def evaluate(
+    def _majority_voting(
         self,
-        y_true: pd.Series,
-        output_report: bool = True
-    ) -> Dict[str, Dict[str, float]]:
+        text_predictions: Dict[str, np.ndarray],
+        financial_predictions: Dict[str, np.ndarray]
+    ) -> np.ndarray:
         """
-        Evaluate predictions against true labels
+        Combine predictions using majority voting
         
         Args:
-            y_true: True labels
-            output_report: Whether to output evaluation report
+            text_predictions: Dictionary mapping text model names to predictions
+            financial_predictions: Dictionary mapping financial model names to predictions
             
         Returns:
-            Dictionary of evaluation metrics
+            Array of ensemble predictions
         """
-        if self.ensemble_predictions is None:
-            raise ValueError("No ensemble predictions to evaluate")
+        # Combine all predictions
+        all_preds = []
+        for preds in text_predictions.values():
+            all_preds.append(preds)
         
-        # Evaluate individual model predictions
-        model_metrics = {}
-        for col in self.ensemble_predictions.columns:
-            if col == 'setup_id':
-                continue
-            
-            y_pred = self.ensemble_predictions[col]
-            
-            # Calculate metrics
-            metrics = {
-                'accuracy': accuracy_score(y_true, y_pred),
-                'precision': precision_score(y_true, y_pred, average='weighted'),
-                'recall': recall_score(y_true, y_pred, average='weighted'),
-                'f1': f1_score(y_true, y_pred, average='weighted'),
-                'confusion_matrix': confusion_matrix(y_true, y_pred),
-                'classification_report': classification_report(y_true, y_pred)
-            }
-            
-            model_metrics[col] = metrics
-            
-            # Plot confusion matrix
-            self._plot_confusion_matrix(col, metrics['confusion_matrix'], np.unique(y_true))
-            
-            logger.info(f"Metrics for {col}:")
-            logger.info(f"  - Accuracy: {metrics['accuracy']:.4f}")
-            logger.info(f"  - Precision: {metrics['precision']:.4f}")
-            logger.info(f"  - Recall: {metrics['recall']:.4f}")
-            logger.info(f"  - F1 Score: {metrics['f1']:.4f}")
+        for preds in financial_predictions.values():
+            all_preds.append(preds)
         
-        # Output evaluation report
-        if output_report:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            report_path = self.output_dir / f"ensemble_evaluation_{timestamp}.txt"
-            
-            with open(report_path, 'w') as f:
-                f.write("Ensemble Evaluation Report\n")
-                f.write("========================\n\n")
-                
-                for model_name, metrics in model_metrics.items():
-                    f.write(f"Model: {model_name}\n")
-                    f.write(f"Accuracy: {metrics['accuracy']:.4f}\n")
-                    f.write(f"Precision: {metrics['precision']:.4f}\n")
-                    f.write(f"Recall: {metrics['recall']:.4f}\n")
-                    f.write(f"F1 Score: {metrics['f1']:.4f}\n\n")
-                    f.write("Confusion Matrix:\n")
-                    f.write(str(metrics['confusion_matrix']))
-                    f.write("\n\nClassification Report:\n")
-                    f.write(str(metrics['classification_report']))
-                    f.write("\n\n")
-            
-            logger.info(f"Saved evaluation report to {report_path}")
-        
-        return model_metrics
-    
-    def _plot_confusion_matrix(self, model_name: str, cm: np.ndarray, classes: np.ndarray):
-        """Plot confusion matrix"""
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=classes, yticklabels=classes)
-        plt.title(f'Confusion Matrix - {model_name}')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
-        plt.tight_layout()
-        
-        # Save plot
-        plot_path = self.output_dir / f"{model_name}_confusion_matrix.png"
-        plt.savefig(plot_path)
-        plt.close()
-        
-        logger.info(f"Saved confusion matrix plot to {plot_path}")
-    
-    def save_predictions(self, output_file: str = None) -> str:
-        """
-        Save ensemble predictions to CSV
-        
-        Args:
-            output_file: Path to output CSV file
-            
-        Returns:
-            Path to saved CSV file
-        """
-        if self.ensemble_predictions is None:
-            raise ValueError("No ensemble predictions to save")
-        
-        if output_file is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_file = self.output_dir / f"ensemble_predictions_{timestamp}.csv"
+        # Stack predictions and take mode along axis 0
+        if all_preds:
+            stacked_preds = np.vstack(all_preds)
+            # Count occurrences of each class for each sample
+            ensemble_preds = np.apply_along_axis(
+                lambda x: np.bincount(x.astype(int), minlength=3).argmax(),
+                axis=0,
+                arr=stacked_preds
+            )
+            return ensemble_preds
         else:
-            output_file = Path(output_file)
+            logger.error("No predictions to ensemble")
+            return np.array([])
+    
+    def _weighted_voting(
+        self,
+        text_predictions: Dict[str, np.ndarray],
+        financial_predictions: Dict[str, np.ndarray]
+    ) -> np.ndarray:
+        """
+        Combine predictions using weighted voting
         
-        # Create output directory if it doesn't exist
-        output_file.parent.mkdir(exist_ok=True, parents=True)
+        Args:
+            text_predictions: Dictionary mapping text model names to predictions
+            financial_predictions: Dictionary mapping financial model names to predictions
+            
+        Returns:
+            Array of ensemble predictions
+        """
+        # Get number of samples
+        n_samples = 0
+        for preds in text_predictions.values():
+            n_samples = len(preds)
+            break
         
-        # Save to CSV
-        self.ensemble_predictions.to_csv(output_file, index=False)
-        logger.info(f"Saved ensemble predictions to {output_file}")
+        if n_samples == 0:
+            for preds in financial_predictions.values():
+                n_samples = len(preds)
+                break
         
-        return str(output_file)
+        if n_samples == 0:
+            logger.error("No predictions to ensemble")
+            return np.array([])
+        
+        # Initialize vote counts for each class
+        votes = np.zeros((n_samples, 3))  # 3 classes: 0, 1, 2
+        
+        # Add weighted votes for text models
+        for model_name, preds in text_predictions.items():
+            weight = self.text_weights.get(model_name, 1.0)
+            for i, pred in enumerate(preds):
+                votes[i, int(pred)] += weight
+        
+        # Add weighted votes for financial models
+        for model_name, preds in financial_predictions.items():
+            weight = self.financial_weights.get(model_name, 1.0)
+            for i, pred in enumerate(preds):
+                votes[i, int(pred)] += weight
+        
+        # Get class with highest weighted vote for each sample
+        ensemble_preds = np.argmax(votes, axis=1)
+        return ensemble_preds
 
 def main():
     """Main function"""
-    parser = argparse.ArgumentParser(description='Ensemble domain predictions')
-    parser.add_argument('--text-models', required=True,
-                       help='Directory containing trained text models')
-    parser.add_argument('--financial-models', required=True,
-                       help='Directory containing trained financial models')
-    parser.add_argument('--text-test-data', required=True,
-                       help='Path to text test data CSV')
-    parser.add_argument('--financial-test-data', required=True,
-                       help='Path to financial test data CSV')
-    parser.add_argument('--output', default='data/ensemble_predictions.csv',
-                       help='Path to output CSV file')
-    parser.add_argument('--output-dir', default='ensemble',
-                       help='Directory to save ensemble results')
-    parser.add_argument('--ensemble-method', choices=['voting', 'stacking'], default='voting',
+    parser = argparse.ArgumentParser(description='Ensemble domain-specific model predictions')
+    parser.add_argument('--text-data', required=True,
+                       help='Path to text features CSV')
+    parser.add_argument('--financial-data', required=True,
+                       help='Path to financial features CSV')
+    parser.add_argument('--text-models-dir', default='models/text',
+                       help='Directory containing text models')
+    parser.add_argument('--financial-models-dir', default='models/financial',
+                       help='Directory containing financial models')
+    parser.add_argument('--ensemble-method', choices=['majority_voting', 'weighted_voting'],
+                       default='weighted_voting',
                        help='Method for ensembling predictions')
-    parser.add_argument('--label-col', default='label',
-                       help='Name of the label column')
-    parser.add_argument('--setup-id-col', default='setup_id',
-                       help='Name of the setup ID column')
-    parser.add_argument('--model-types', nargs='+',
-                       default=['random_forest', 'xgboost', 'logistic_regression'],
-                       help='Types of models to load')
+    parser.add_argument('--output-file', default='data/ensemble_predictions.csv',
+                       help='Path to output CSV file')
     
     args = parser.parse_args()
     
-    # Initialize ensemble predictor
-    ensemble_predictor = EnsemblePredictor(
-        output_dir=args.output_dir,
+    # Load data
+    logger.info(f"Loading text data from {args.text_data}")
+    text_data = pd.read_csv(args.text_data)
+    
+    logger.info(f"Loading financial data from {args.financial_data}")
+    financial_data = pd.read_csv(args.financial_data)
+    
+    # Initialize ensembler
+    ensembler = DomainEnsembler(
+        text_models_dir=args.text_models_dir,
+        financial_models_dir=args.financial_models_dir,
         ensemble_method=args.ensemble_method
     )
     
-    # Load text models
-    ensemble_predictor.load_models(
-        domain='text',
-        model_dir=args.text_models,
-        model_types=args.model_types
-    )
+    # Load models
+    ensembler.load_latest_models()
     
-    # Load financial models
-    ensemble_predictor.load_models(
-        domain='financial',
-        model_dir=args.financial_models,
-        model_types=args.model_types
-    )
+    # Set model weights (based on model performance)
+    text_weights = {
+        'random_forest': 1.0,
+        'xgboost': 2.0,  # Increased weight for text XGBoost model
+        'logistic_regression': 0.5
+    }
     
-    # Load text test data
-    logger.info(f"Loading text test data from {args.text_test_data}")
-    text_test_data = pd.read_csv(args.text_test_data)
+    financial_weights = {
+        'random_forest': 0.8,
+        'xgboost': 0.8,
+        'logistic_regression': 0.8
+    }
     
-    # Load financial test data
-    logger.info(f"Loading financial test data from {args.financial_test_data}")
-    financial_test_data = pd.read_csv(args.financial_test_data)
+    ensembler.set_model_weights(text_weights, financial_weights)
     
-    # Get setup IDs
-    setup_ids = text_test_data[args.setup_id_col]
+    # Make ensemble predictions
+    results = ensembler.predict(text_data, financial_data)
     
-    # Check if setup IDs match
-    if not setup_ids.equals(financial_test_data[args.setup_id_col]):
-        logger.warning("Setup IDs in text and financial test data do not match")
-        # Use intersection of setup IDs
-        common_setup_ids = set(setup_ids) & set(financial_test_data[args.setup_id_col])
-        logger.info(f"Using {len(common_setup_ids)} common setup IDs")
-        
-        # Filter data to common setup IDs
-        text_test_data = text_test_data[text_test_data[args.setup_id_col].isin(common_setup_ids)]
-        financial_test_data = financial_test_data[financial_test_data[args.setup_id_col].isin(common_setup_ids)]
-        
-        # Update setup IDs
-        setup_ids = text_test_data[args.setup_id_col]
-    
-    # Prepare text features
-    X_text = text_test_data.drop(columns=[args.setup_id_col, args.label_col], errors='ignore')
-    
-    # Prepare financial features
-    X_financial = financial_test_data.drop(columns=[args.setup_id_col, args.label_col], errors='ignore')
-    
-    # Make predictions with text models
-    ensemble_predictor.predict(
-        domain='text',
-        X=X_text,
-        setup_ids=setup_ids
-    )
-    
-    # Make predictions with financial models
-    ensemble_predictor.predict(
-        domain='financial',
-        X=X_financial,
-        setup_ids=setup_ids
-    )
-    
-    # Ensemble predictions
-    ensemble_predictions = ensemble_predictor.ensemble_predictions(
-        setup_ids=setup_ids,
-        method=args.ensemble_method
-    )
-    
-    # Save predictions
-    ensemble_predictor.save_predictions(args.output)
-    
-    # Evaluate if label column is available
-    if args.label_col in text_test_data.columns:
-        y_true = text_test_data[args.label_col]
-        ensemble_predictor.evaluate(y_true=y_true)
-    
-    logger.info("Ensemble prediction complete")
+    # Save results to CSV
+    results.to_csv(args.output_file, index=False)
+    logger.info(f"Saved ensemble predictions to {args.output_file}")
 
 if __name__ == '__main__':
     main() 

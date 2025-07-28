@@ -1,0 +1,17 @@
+# Output files
+*.png
+*.csv
+*.pkl
+*.txt
+!requirements.txt
+!*setups.txt
+
+# Model directories
+models/*/
+storage/
+lancedb_store/
+
+# Cache
+__pycache__/
+*.py[cod]
+*$py.class 

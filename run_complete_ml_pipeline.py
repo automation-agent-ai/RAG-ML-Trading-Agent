@@ -1,549 +1,456 @@
 #!/usr/bin/env python3
 """
-Complete ML Pipeline for Stock Performance Prediction
+Run Complete ML Pipeline
 
-This script orchestrates the complete ML pipeline:
-1. Create embeddings (with/without labels based on mode)
-2. Extract features from raw data (with similarity enhancement in prediction mode)
-3. Merge features into ML feature tables
-4. Train/predict ML models
+This script runs the complete ML pipeline, from feature extraction to model training and prediction.
+
+Usage:
+    python run_complete_ml_pipeline.py --mode [training|prediction|all]
 """
 
 import os
 import sys
+import argparse
+import logging
 import pandas as pd
 import numpy as np
-from datetime import datetime
-from pathlib import Path
-import logging
 import duckdb
-from typing import List, Dict, Any, Optional
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Tuple
+import subprocess
+import json
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Add project root to path for proper imports
-project_root = Path(__file__).parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
-from core.ml_feature_merger import MLFeatureMerger
-
 class CompletePipeline:
-    """Complete pipeline for feature extraction and ML feature table creation"""
+    """Class for running the complete ML pipeline"""
     
     def __init__(
         self,
         db_path: str = "data/sentiment_system.duckdb",
-        lancedb_dir: str = "lancedb_store",
-        prediction_db_path: str = "data/prediction_features.duckdb"
+        output_dir: str = "data/ml_pipeline_output",
+        conda_env: str = "sts"
     ):
+        """
+        Initialize the pipeline
+        
+        Args:
+            db_path: Path to DuckDB database
+            output_dir: Directory to save output files
+            conda_env: Conda environment to use for running commands
+        """
         self.db_path = db_path
-        self.lancedb_dir = lancedb_dir
-        self.prediction_db_path = prediction_db_path
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True, parents=True)
+        self.conda_env = conda_env
         
-        # Initialize feature merger
-        self.feature_merger = MLFeatureMerger(db_path=db_path)
+        # Create subdirectories
+        self.features_dir = self.output_dir / "features"
+        self.labeled_dir = self.output_dir / "labeled"
+        self.balanced_dir = self.output_dir / "balanced"
+        self.models_dir = self.output_dir / "models"
+        self.predictions_dir = self.output_dir / "predictions"
+        self.results_dir = self.output_dir / "results"
         
-        # Initialize agents and embedders lazily
-        self.news_agent = None
-        self.fundamentals_agent = None
-        self.analyst_agent = None
-        self.userposts_agent = None
-        
-    def _init_agents(self, mode: str = "training"):
-        """Initialize all agents"""
-        if not hasattr(self, 'news_agent') or self.news_agent is None:
-            from agents.news.enhanced_news_agent_duckdb import EnhancedNewsAgentDuckDB
-            self.news_agent = EnhancedNewsAgentDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                mode=mode
-            )
-            
-        if not hasattr(self, 'fundamentals_agent') or self.fundamentals_agent is None:
-            from agents.fundamentals.enhanced_fundamentals_agent_duckdb import EnhancedFundamentalsAgentDuckDB
-            self.fundamentals_agent = EnhancedFundamentalsAgentDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                mode=mode
-            )
-            
-        if not hasattr(self, 'analyst_agent') or self.analyst_agent is None:
-            from agents.analyst_recommendations.enhanced_analyst_recommendations_agent_duckdb import EnhancedAnalystRecommendationsAgentDuckDB
-            self.analyst_agent = EnhancedAnalystRecommendationsAgentDuckDB(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                mode=mode
-            )
-            
-        if not hasattr(self, 'userposts_agent') or self.userposts_agent is None:
-            from agents.userposts.enhanced_userposts_agent_complete import EnhancedUserPostsAgentComplete
-            self.userposts_agent = EnhancedUserPostsAgentComplete(
-                db_path=self.db_path,
-                lancedb_dir=self.lancedb_dir,
-                mode=mode
-            )
+        for directory in [self.features_dir, self.labeled_dir, self.balanced_dir, 
+                         self.models_dir, self.predictions_dir, self.results_dir]:
+            directory.mkdir(exist_ok=True, parents=True)
     
-    def create_embeddings(self, setup_ids: List[str], mode: str = 'training', domains: List[str] = ['all']) -> Dict[str, bool]:
+    def run_command(self, command: str) -> Tuple[int, str]:
         """
-        Create embeddings with proper training/prediction mode separation
+        Run a shell command
         
         Args:
-            setup_ids: List of setup IDs to process
-            mode: Either 'training' or 'prediction'
-            domains: List of domains to process ('all', 'news', 'fundamentals', 'analyst', 'userposts')
-        
+            command: Command to run
+            
         Returns:
-            Dictionary with success status for each domain
+            Tuple of (return code, output)
         """
-        logger.info(f"🎰 CREATING EMBEDDINGS ({mode.upper()} MODE)")
-        logger.info("=" * 60)
+        # Add conda environment activation if specified
+        if self.conda_env:
+            command = f"conda run -n {self.conda_env} {command}"
         
-        results = {}
-        include_labels = (mode == 'training')
-        process_all = 'all' in domains
+        logger.info(f"Running command: {command}")
         
-        try:
-            # 1. News Embeddings
-            if process_all or 'news' in domains:
-                logger.info("📰 Creating news embeddings...")
-                from embeddings.embed_news_duckdb import NewsEmbeddingPipelineDuckDB
-                news_embedder = NewsEmbeddingPipelineDuckDB(
-                    db_path=self.db_path,
-                    lancedb_dir=self.lancedb_dir,
-                    include_labels=include_labels,
-                    mode=mode
-                )
-                news_result = news_embedder.process_setups(setup_ids)
-                results['news_embeddings'] = news_result
-                logger.info(f"✅ News embeddings: {'Success' if news_result else 'Failed'}")
-            else:
-                results['news_embeddings'] = None
-                logger.info("⏩ Skipping news embeddings (not in selected domains)")
-            
-            # 2. Fundamentals Embeddings
-            if process_all or 'fundamentals' in domains:
-                logger.info("📊 Creating fundamentals embeddings...")
-                from embeddings.embed_fundamentals_duckdb import FundamentalsEmbedderDuckDB
-                fundamentals_embedder = FundamentalsEmbedderDuckDB(
-                    db_path=self.db_path,
-                    lancedb_dir=self.lancedb_dir,
-                    include_labels=include_labels,
-                    mode=mode
-                )
-                fundamentals_result = fundamentals_embedder.embed_fundamentals(setup_ids)
-                results['fundamentals_embeddings'] = fundamentals_result
-                logger.info(f"✅ Fundamentals embeddings: {'Success' if fundamentals_result else 'Failed'}")
-            else:
-                results['fundamentals_embeddings'] = None
-                logger.info("⏩ Skipping fundamentals embeddings (not in selected domains)")
-            
-            # 3. Analyst Recommendations Embeddings
-            if process_all or 'analyst' in domains:
-                logger.info("📈 Creating analyst recommendations embeddings...")
-                from embeddings.embed_analyst_recommendations_duckdb import AnalystRecommendationsEmbedderDuckDB
-                analyst_embedder = AnalystRecommendationsEmbedderDuckDB(
-                    db_path=self.db_path,
-                    lancedb_dir=self.lancedb_dir,
-                    include_labels=include_labels,
-                    mode=mode
-                )
-                analyst_result = analyst_embedder.process_setups(setup_ids)
-                results['analyst_embeddings'] = analyst_result
-                logger.info(f"✅ Analyst embeddings: {'Success' if analyst_result else 'Failed'}")
-            else:
-                results['analyst_embeddings'] = None
-                logger.info("⏩ Skipping analyst embeddings (not in selected domains)")
-            
-            # 4. UserPosts Embeddings
-            if process_all or 'userposts' in domains:
-                logger.info("💬 Creating userposts embeddings...")
-                from embeddings.embed_userposts_duckdb import UserPostsEmbedderDuckDB
-                userposts_embedder = UserPostsEmbedderDuckDB(
-                    db_path=self.db_path,
-                    lancedb_dir=self.lancedb_dir,
-                    include_labels=include_labels,
-                    mode=mode
-                )
-                userposts_result = userposts_embedder.process_setups(setup_ids)
-                results['userposts_embeddings'] = userposts_result
-                logger.info(f"✅ UserPosts embeddings: {'Success' if userposts_result else 'Failed'}")
-            else:
-                results['userposts_embeddings'] = None
-                logger.info("⏩ Skipping userposts embeddings (not in selected domains)")
-            
-        except Exception as e:
-            logger.error(f"❌ Embedding creation failed: {e}")
-            results = {domain: False for domain in ['news_embeddings', 'fundamentals_embeddings', 'analyst_embeddings', 'userposts_embeddings']}
+        # Run command and capture output
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True
+        )
         
-        return results
+        # Read and log output in real-time
+        output = []
+        for line in process.stdout:
+            line = line.rstrip()
+            logger.info(f"  {line}")
+            output.append(line)
         
-    def extract_features(self, setup_ids: List[str], mode: str = "training", domains: List[str] = ['all']):
-        """
-        Extract features for setup_ids
+        # Wait for process to complete
+        return_code = process.wait()
         
-        Args:
-            setup_ids: List of setup IDs to process
-            mode: Either 'training' or 'prediction'
-            domains: List of domains to process ('all', 'news', 'fundamentals', 'analyst', 'userposts')
-        
-        Returns:
-            Dictionary with success status for each agent
-        """
-        logger.info(f"🔧 RUNNING FEATURE EXTRACTION ({mode.upper()} MODE)")
-        logger.info("=" * 60)
-        
-        # Initialize agents if not already done
-        self._init_agents(mode)
-        
-        results = {}
-        similarity_predictions = {}
-        process_all = 'all' in domains
-        
-        # Process each setup ID
-        for setup_id in setup_ids:
-            similarity_predictions[setup_id] = {}
-            
-            # Process with news agent
-            if process_all or 'news' in domains:
-                try:
-                    logger.info(f"Calling news_agent.process_setup for {setup_id}")
-                    news_result = self.news_agent.process_setup(setup_id, mode)
-                    logger.info(f"News result type: {type(news_result)}")
-                    
-                    if isinstance(news_result, tuple) and len(news_result) == 2:
-                        # Unpack features and prediction
-                        features, prediction = news_result
-                        logger.info(f"News prediction: {prediction}")
-                        similarity_predictions[setup_id]['news'] = prediction
-                    else:
-                        logger.info("News agent did not return a prediction")
-                        
-                    results['news'] = True
-                except Exception as e:
-                    logger.error(f"Error processing news for {setup_id}: {e}")
-                    results['news'] = False
-            else:
-                logger.info("⏩ Skipping news feature extraction (not in selected domains)")
-                results['news'] = None
-            
-            # Process with fundamentals agent
-            if process_all or 'fundamentals' in domains:
-                try:
-                    logger.info(f"Calling fundamentals_agent.process_setup for {setup_id}")
-                    fundamentals_result = self.fundamentals_agent.process_setup(setup_id, mode)
-                    logger.info(f"Fundamentals result type: {type(fundamentals_result)}")
-                    
-                    if isinstance(fundamentals_result, tuple) and len(fundamentals_result) == 2:
-                        # Unpack features and prediction
-                        features, prediction = fundamentals_result
-                        logger.info(f"Fundamentals prediction: {prediction}")
-                        similarity_predictions[setup_id]['fundamentals'] = prediction
-                    else:
-                        logger.info("Fundamentals agent did not return a prediction")
-                        
-                    results['fundamentals'] = True
-                except Exception as e:
-                    logger.error(f"Error processing fundamentals for {setup_id}: {e}")
-                    results['fundamentals'] = False
-            else:
-                logger.info("⏩ Skipping fundamentals feature extraction (not in selected domains)")
-                results['fundamentals'] = None
-            
-            # Process with analyst agent
-            if process_all or 'analyst' in domains:
-                try:
-                    logger.info(f"Calling analyst_agent.process_setup for {setup_id}")
-                    analyst_result = self.analyst_agent.process_setup(setup_id, mode)
-                    logger.info(f"Analyst result type: {type(analyst_result)}")
-                    
-                    if isinstance(analyst_result, tuple) and len(analyst_result) == 2:
-                        # Unpack features and prediction
-                        features, prediction = analyst_result
-                        logger.info(f"Analyst prediction: {prediction}")
-                        similarity_predictions[setup_id]['analyst'] = prediction
-                    else:
-                        logger.info("Analyst agent did not return a prediction")
-                        
-                    results['analyst'] = True
-                except Exception as e:
-                    logger.error(f"Error processing analyst recommendations for {setup_id}: {e}")
-                    results['analyst'] = False
-            else:
-                logger.info("⏩ Skipping analyst feature extraction (not in selected domains)")
-                results['analyst'] = None
-            
-            # Process with userposts agent
-            if process_all or 'userposts' in domains:
-                try:
-                    logger.info(f"Calling userposts_agent.process_setup for {setup_id}")
-                    userposts_result = self.userposts_agent.process_setup(setup_id, mode)
-                    logger.info(f"UserPosts result type: {type(userposts_result)}")
-                    
-                    if isinstance(userposts_result, tuple) and len(userposts_result) == 2:
-                        # Unpack features and prediction
-                        features, prediction = userposts_result
-                        logger.info(f"UserPosts prediction: {prediction}")
-                        similarity_predictions[setup_id]['userposts'] = prediction
-                    else:
-                        logger.info("UserPosts agent did not return a prediction")
-                        
-                    results['userposts'] = True
-                except Exception as e:
-                    logger.error(f"Error processing user posts for {setup_id}: {e}")
-                    results['userposts'] = False
-            else:
-                logger.info("⏩ Skipping userposts feature extraction (not in selected domains)")
-                results['userposts'] = None
-        
-        # Store similarity predictions if in prediction mode
-        logger.info(f"Similarity predictions: {similarity_predictions}")
-        if mode == "prediction" and any(similarity_predictions.values()):
-            logger.info("Storing similarity predictions")
-            self._store_similarity_predictions(similarity_predictions)
+        if return_code != 0:
+            logger.error(f"Command failed with return code {return_code}")
         else:
-            logger.info("No similarity predictions to store or not in prediction mode")
+            logger.info(f"Command completed successfully")
         
-        # Print summary
-        for agent_name, success in results.items():
-            logger.info(f"✅ {agent_name.capitalize()} features: {'Success' if success else 'Failed'}")
-        
-        return results
+        return return_code, "\n".join(output)
     
-    def _create_temporary_embedding(self, setup_id: str, content: str, domain: str) -> Optional[np.ndarray]:
-        """Create a temporary embedding for similarity search"""
-        try:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer('all-MiniLM-L6-v2')
-            return model.encode(content)
-        except Exception as e:
-            logger.error(f"Error creating temporary embedding for {domain} setup {setup_id}: {e}")
-            return None
-    
-    def _store_similarity_predictions(self, predictions: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
+    def extract_features(self, mode: str = "training") -> Dict[str, str]:
         """
-        Store similarity-based predictions in DuckDB
+        Extract ML features from DuckDB
         
         Args:
-            predictions: Dictionary of predictions by setup_id and domain
-        """
-        if not predictions:
-            logger.info("No similarity predictions to store")
-            return
-        
-        # Debug: Print predictions structure
-        logger.info(f"Predictions structure: {predictions}")
+            mode: Mode ('training' or 'prediction')
             
-        try:
-            # Connect to DuckDB
-            conn = duckdb.connect(self.db_path)
-            
-            # Create table if it doesn't exist
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS similarity_predictions (
-                    setup_id VARCHAR,
-                    domain VARCHAR,
-                    predicted_outperformance DOUBLE,
-                    confidence DOUBLE,
-                    positive_ratio DOUBLE,
-                    negative_ratio DOUBLE,
-                    neutral_ratio DOUBLE,
-                    similar_cases_count INTEGER,
-                    prediction_timestamp VARCHAR,
-                    PRIMARY KEY (setup_id, domain)
-                )
-            """)
-            
-            # Convert predictions to rows
-            rows = []
-            for setup_id, domains in predictions.items():
-                logger.info(f"Processing setup_id: {setup_id}, domains: {list(domains.keys())}")
-                for domain, prediction in domains.items():
-                    if prediction:  # Skip empty predictions
-                        logger.info(f"Processing domain: {domain}, prediction: {prediction}")
-                        row = (
-                            setup_id,
-                            domain,
-                            prediction.get('predicted_outperformance', 0.0),
-                            prediction.get('confidence', 0.0),
-                            prediction.get('positive_ratio', 0.0),
-                            prediction.get('negative_ratio', 0.0),
-                            prediction.get('neutral_ratio', 0.0),
-                            prediction.get('similar_cases_count', 0),
-                            prediction.get('prediction_timestamp', datetime.now().isoformat())
-                        )
-                        rows.append(row)
-            
-            # Insert rows
-            if rows:
-                logger.info(f"Inserting {len(rows)} rows into similarity_predictions table")
-                conn.executemany("""
-                    INSERT OR REPLACE INTO similarity_predictions
-                    (setup_id, domain, predicted_outperformance, confidence, 
-                     positive_ratio, negative_ratio, neutral_ratio, 
-                     similar_cases_count, prediction_timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, rows)
-                
-                # Verify insertion
-                count = conn.execute("SELECT COUNT(*) FROM similarity_predictions").fetchone()[0]
-                logger.info(f"Verified {count} records in similarity_predictions table")
-            else:
-                logger.info("No valid similarity predictions to store")
-                
-            # Commit and close
-            conn.commit()
-            conn.close()
-            
-        except Exception as e:
-            logger.error(f"Error storing similarity predictions: {e}")
-            # Continue without failing the pipeline
-    
-    def create_ml_features(self, setup_ids: List[str], mode: str = 'training') -> Dict[str, Dict[str, int]]:
-        """Create ML feature tables by merging domain features"""
-        logger.info(f"\n🔄 Creating {mode} ML feature tables...")
-        
-        # Use the MLFeatureMerger to create comprehensive ML feature tables
-        results = self.feature_merger.merge_all_features(setup_ids, mode)
-        
-        return results
-    
-    def run_complete_pipeline(self, setup_ids: List[str], mode: str = 'training', domains: List[str] = ['all']) -> Dict[str, Any]:
-        """
-        Run complete pipeline: embedding creation, feature extraction, and ML feature table creation
-        
-        Args:
-            setup_ids: List of setup IDs to process
-            mode: Either 'training' or 'prediction'
-            domains: List of domains to process ('all', 'news', 'fundamentals', 'analyst', 'userposts')
-        
         Returns:
-            Dictionary with results summary
+            Dictionary with paths to extracted feature files
         """
-        logger.info("🚀 STARTING COMPLETE PIPELINE")
-        logger.info("=" * 70)
+        logger.info(f"Extracting {mode} features")
         
-        start_time = datetime.now()
+        # Extract text features
+        text_setup_file = f"data/{mode}_setups.txt"
+        text_features_cmd = f"python extract_text_features.py --mode {mode} --setup-list {text_setup_file} --output-dir {self.features_dir}"
+        self.run_command(text_features_cmd)
         
-        # Step 1: Create embeddings (with proper training/prediction mode handling)
-        embedding_results = self.create_embeddings(setup_ids, mode, domains)
+        # Extract financial features
+        financial_features_cmd = f"python extract_financial_features_from_duckdb.py --mode {mode} --setup-list {text_setup_file} --output-dir {self.features_dir}"
+        self.run_command(financial_features_cmd)
         
-        # Step 2: Extract features (with similarity enhancement in prediction mode)
-        extraction_results = self.extract_features(setup_ids, mode, domains)
+        # Find the most recent feature files
+        text_pattern = f"text_ml_features_{mode}_*.csv"
+        financial_pattern = f"financial_ml_features_{mode}_*.csv"
         
-        # Step 3: Create ML feature tables
-        ml_features_results = self.create_ml_features(setup_ids, mode)
+        text_files = sorted(list(self.features_dir.glob(text_pattern)), reverse=True)
+        financial_files = sorted(list(self.features_dir.glob(financial_pattern)), reverse=True)
         
-        # Generate summary
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
+        if not text_files or not financial_files:
+            logger.error(f"Failed to find extracted feature files")
+            return {}
+        
+        text_file = text_files[0]
+        financial_file = financial_files[0]
+        
+        logger.info(f"Extracted text features: {text_file}")
+        logger.info(f"Extracted financial features: {financial_file}")
         
         return {
-            'status': 'success',
-            'start_time': start_time.isoformat(),
-            'end_time': end_time.isoformat(),
-            'duration_seconds': duration,
-            'setups_processed': len(setup_ids),
-            'domains_processed': domains,
-            'embedding_results': embedding_results,
-            'extraction_results': extraction_results,
-            'ml_features_results': ml_features_results
+            "text_features": str(text_file),
+            "financial_features": str(financial_file)
         }
+    
+    def add_labels(self, feature_files: Dict[str, str], mode: str = "training") -> Dict[str, str]:
+        """
+        Add labels to ML features
+        
+        Args:
+            feature_files: Dictionary with paths to feature files
+            mode: Mode ('training' or 'prediction')
+            
+        Returns:
+            Dictionary with paths to labeled feature files
+        """
+        logger.info(f"Adding labels to {mode} features")
+        
+        text_file = feature_files.get("text_features")
+        financial_file = feature_files.get("financial_features")
+        
+        if not text_file or not financial_file:
+            logger.error("Missing feature files")
+            return {}
+        
+        # Add labels to text features
+        text_labeled_file = str(self.labeled_dir / f"text_ml_features_{mode}_labeled.csv")
+        text_labels_cmd = f"python add_labels_to_features.py --input {text_file} --output {text_labeled_file} --mode {mode}"
+        self.run_command(text_labels_cmd)
+        
+        # Add labels to financial features
+        financial_labeled_file = str(self.labeled_dir / f"financial_ml_features_{mode}_labeled.csv")
+        financial_labels_cmd = f"python add_labels_to_features.py --input {financial_file} --output {financial_labeled_file} --mode {mode}"
+        self.run_command(financial_labels_cmd)
+        
+        return {
+            "text_labeled": text_labeled_file,
+            "financial_labeled": financial_labeled_file
+        }
+    
+    def balance_datasets(self, labeled_files: Dict[str, str]) -> Dict[str, str]:
+        """
+        Balance datasets to ensure consistent setup_ids and labels
+        
+        Args:
+            labeled_files: Dictionary with paths to labeled feature files
+            
+        Returns:
+            Dictionary with paths to balanced feature files
+        """
+        logger.info("Balancing datasets")
+        
+        text_train = labeled_files.get("text_labeled_train")
+        financial_train = labeled_files.get("financial_labeled_train")
+        text_predict = labeled_files.get("text_labeled_predict")
+        financial_predict = labeled_files.get("financial_labeled_predict")
+        
+        if not text_train or not financial_train or not text_predict or not financial_predict:
+            logger.error("Missing labeled files")
+            return {}
+        
+        # Balance datasets
+        balance_cmd = (
+            f"python balance_ml_datasets.py "
+            f"--text-train {text_train} "
+            f"--financial-train {financial_train} "
+            f"--text-predict {text_predict} "
+            f"--financial-predict {financial_predict} "
+            f"--output-dir {self.balanced_dir}"
+        )
+        self.run_command(balance_cmd)
+        
+        # Find the most recent balanced files
+        text_train_pattern = "text_ml_features_training_balanced_*.csv"
+        financial_train_pattern = "financial_ml_features_training_balanced_*.csv"
+        text_predict_pattern = "text_ml_features_prediction_balanced_*.csv"
+        financial_predict_pattern = "financial_ml_features_prediction_balanced_*.csv"
+        
+        text_train_files = sorted(list(self.balanced_dir.glob(text_train_pattern)), reverse=True)
+        financial_train_files = sorted(list(self.balanced_dir.glob(financial_train_pattern)), reverse=True)
+        text_predict_files = sorted(list(self.balanced_dir.glob(text_predict_pattern)), reverse=True)
+        financial_predict_files = sorted(list(self.balanced_dir.glob(financial_predict_pattern)), reverse=True)
+        
+        if not text_train_files or not financial_train_files or not text_predict_files or not financial_predict_files:
+            logger.error("Failed to find balanced files")
+            return {}
+        
+        return {
+            "text_balanced_train": str(text_train_files[0]),
+            "financial_balanced_train": str(financial_train_files[0]),
+            "text_balanced_predict": str(text_predict_files[0]),
+            "financial_balanced_predict": str(financial_predict_files[0])
+        }
+    
+    def train_models(self, balanced_files: Dict[str, str]) -> Dict[str, str]:
+        """
+        Train ML models
+        
+        Args:
+            balanced_files: Dictionary with paths to balanced feature files
+            
+        Returns:
+            Dictionary with paths to trained model directories
+        """
+        logger.info("Training ML models")
+        
+        text_train = balanced_files.get("text_balanced_train")
+        financial_train = balanced_files.get("financial_balanced_train")
+        
+        if not text_train or not financial_train:
+            logger.error("Missing balanced training files")
+            return {}
+        
+        # Train text models
+        text_models_dir = str(self.models_dir / "text")
+        text_train_cmd = f"python train_domain_models_cv.py --input {text_train} --domain text --output-dir {text_models_dir}"
+        self.run_command(text_train_cmd)
+        
+        # Train financial models
+        financial_models_dir = str(self.models_dir / "financial")
+        financial_train_cmd = f"python train_domain_models_cv.py --input {financial_train} --domain financial --output-dir {financial_models_dir}"
+        self.run_command(financial_train_cmd)
+        
+        return {
+            "text_models": text_models_dir,
+            "financial_models": financial_models_dir
+        }
+    
+    def make_predictions(self, balanced_files: Dict[str, str], model_dirs: Dict[str, str]) -> Dict[str, str]:
+        """
+        Make predictions using trained models
+        
+        Args:
+            balanced_files: Dictionary with paths to balanced feature files
+            model_dirs: Dictionary with paths to trained model directories
+            
+        Returns:
+            Dictionary with paths to prediction files
+        """
+        logger.info("Making predictions")
+        
+        text_predict = balanced_files.get("text_balanced_predict")
+        financial_predict = balanced_files.get("financial_balanced_predict")
+        text_models = model_dirs.get("text_models")
+        financial_models = model_dirs.get("financial_models")
+        
+        if not text_predict or not financial_predict or not text_models or not financial_models:
+            logger.error("Missing balanced prediction files or model directories")
+            return {}
+        
+        # Make domain predictions
+        domain_predictions_cmd = (
+            f"python ensemble_domain_predictions.py "
+            f"--text-input {text_predict} "
+            f"--financial-input {financial_predict} "
+            f"--text-models-dir {text_models} "
+            f"--financial-models-dir {financial_models} "
+            f"--output-dir {self.predictions_dir}"
+        )
+        self.run_command(domain_predictions_cmd)
+        
+        # Find the most recent ensemble predictions file
+        ensemble_pattern = "ensemble_predictions_*.csv"
+        ensemble_files = sorted(list(self.predictions_dir.glob(ensemble_pattern)), reverse=True)
+        
+        if not ensemble_files:
+            logger.error("Failed to find ensemble predictions file")
+            return {}
+        
+        ensemble_file = ensemble_files[0]
+        logger.info(f"Ensemble predictions: {ensemble_file}")
+        
+        return {
+            "ensemble_predictions": str(ensemble_file)
+        }
+    
+    def generate_results(self, prediction_files: Dict[str, str]) -> Dict[str, str]:
+        """
+        Generate final results table and visualizations
+        
+        Args:
+            prediction_files: Dictionary with paths to prediction files
+            
+        Returns:
+            Dictionary with paths to results files
+        """
+        logger.info("Generating results")
+        
+        ensemble_predictions = prediction_files.get("ensemble_predictions")
+        
+        if not ensemble_predictions:
+            logger.error("Missing ensemble predictions file")
+            return {}
+        
+        # Generate results table
+        results_table_file = str(self.results_dir / "results_table.csv")
+        results_cmd = f"python generate_results_table.py --input {ensemble_predictions} --output {results_table_file}"
+        self.run_command(results_cmd)
+        
+        # Generate visualizations
+        visualizations_dir = str(self.results_dir / "visualizations")
+        Path(visualizations_dir).mkdir(exist_ok=True, parents=True)
+        
+        viz_cmd = f"python visualize_ensemble_results.py --input {ensemble_predictions} --output-dir {visualizations_dir}"
+        self.run_command(viz_cmd)
+        
+        return {
+            "results_table": results_table_file,
+            "visualizations_dir": visualizations_dir
+        }
+    
+    def run_pipeline(self, mode: str = "all") -> Dict[str, Any]:
+        """
+        Run the complete ML pipeline
+        
+        Args:
+            mode: Mode ('training', 'prediction', or 'all')
+            
+        Returns:
+            Dictionary with paths to all output files
+        """
+        logger.info(f"Running complete ML pipeline in {mode} mode")
+        
+        results = {}
+        
+        # Extract features
+        if mode in ["training", "all"]:
+            training_features = self.extract_features(mode="training")
+            results["training_features"] = training_features
+        
+        if mode in ["prediction", "all"]:
+            prediction_features = self.extract_features(mode="prediction")
+            results["prediction_features"] = prediction_features
+        
+        # Add labels
+        if mode in ["training", "all"]:
+            training_labeled = self.add_labels(results["training_features"], mode="training")
+            results["training_labeled"] = training_labeled
+        
+        if mode in ["prediction", "all"]:
+            prediction_labeled = self.add_labels(results["prediction_features"], mode="prediction")
+            results["prediction_labeled"] = prediction_labeled
+        
+        # Balance datasets
+        if mode == "all":
+            labeled_files = {
+                "text_labeled_train": results["training_labeled"]["text_labeled"],
+                "financial_labeled_train": results["training_labeled"]["financial_labeled"],
+                "text_labeled_predict": results["prediction_labeled"]["text_labeled"],
+                "financial_labeled_predict": results["prediction_labeled"]["financial_labeled"]
+            }
+            balanced_files = self.balance_datasets(labeled_files)
+            results["balanced_files"] = balanced_files
+            
+            # Train models
+            model_dirs = self.train_models(balanced_files)
+            results["model_dirs"] = model_dirs
+            
+            # Make predictions
+            prediction_files = self.make_predictions(balanced_files, model_dirs)
+            results["prediction_files"] = prediction_files
+            
+            # Generate results
+            results_files = self.generate_results(prediction_files)
+            results["results_files"] = results_files
+        
+        logger.info("Pipeline completed successfully")
+        return results
 
 def main():
-    """Run the complete pipeline"""
-    import argparse
-    
+    """Main function"""
     parser = argparse.ArgumentParser(description='Run complete ML pipeline')
-    parser.add_argument('--mode', choices=['training', 'prediction'], default='training',
-                       help='Pipeline mode: training or prediction')
-    parser.add_argument('--setup-ids', nargs='+', help='List of setup_ids to process (required for prediction mode)')
+    parser.add_argument('--mode', choices=['training', 'prediction', 'all'], default='all',
+                       help='Pipeline mode')
     parser.add_argument('--db-path', default='data/sentiment_system.duckdb',
                        help='Path to DuckDB database')
-    parser.add_argument('--prediction-db-path', default='data/prediction_features.duckdb',
-                       help='Path to store prediction features')
-    parser.add_argument('--lancedb-dir', default='lancedb_store',
-                       help='Path to LanceDB directory')
-    parser.add_argument('--step', choices=['all', 'embeddings', 'features', 'ml_tables'], default='all',
-                       help='Pipeline step to run (default: all)')
-    parser.add_argument('--domains', nargs='+', choices=['all', 'news', 'fundamentals', 'analyst', 'userposts'], default=['all'],
-                       help='Domains to process (default: all)')
+    parser.add_argument('--output-dir', default='data/ml_pipeline_output',
+                       help='Directory to save output files')
+    parser.add_argument('--conda-env', default='sts',
+                       help='Conda environment to use')
     
     args = parser.parse_args()
-    
-    # Validate arguments
-    if args.mode == 'prediction' and not args.setup_ids:
-        parser.error("--setup-ids is required for prediction mode")
     
     # Initialize pipeline
     pipeline = CompletePipeline(
         db_path=args.db_path,
-        prediction_db_path=args.prediction_db_path,
-        lancedb_dir=args.lancedb_dir
+        output_dir=args.output_dir,
+        conda_env=args.conda_env
     )
     
-    if args.mode == 'training':
-        # For training mode, get all setups with complete data
-        conn = duckdb.connect(args.db_path)
-        
-        # Find setups that have all required features
-        complete_setups_query = """
-        WITH required_features AS (
-            SELECT setup_id 
-            FROM fundamentals_features
-            INTERSECT
-            SELECT setup_id 
-            FROM news_features
-            INTERSECT
-            SELECT setup_id 
-            FROM userposts_features
-            INTERSECT
-            SELECT setup_id 
-            FROM analyst_recommendations_features
-            INTERSECT
-            SELECT setup_id 
-            FROM labels
-            WHERE outperformance_10d IS NOT NULL
-        )
-        SELECT setup_id 
-        FROM required_features
-        ORDER BY setup_id
-        """
-        setup_ids = [row[0] for row in conn.execute(complete_setups_query).fetchall()]
-        conn.close()
-        
-        logger.info(f"Found {len(setup_ids)} setups with complete data for training")
-    else:
-        # For prediction mode, use provided setup_ids
-        setup_ids = args.setup_ids
-    
-    # Run specific pipeline step or all steps
-    start_time = datetime.now()
-    
-    if args.step == 'all' or args.step == 'embeddings':
-        pipeline.create_embeddings(setup_ids, mode=args.mode, domains=args.domains)
-        
-    if args.step == 'all' or args.step == 'features':
-        pipeline.extract_features(setup_ids, mode=args.mode, domains=args.domains)
-        
-    if args.step == 'all' or args.step == 'ml_tables':
-        pipeline.create_ml_features(setup_ids, mode=args.mode)
+    # Run pipeline
+    results = pipeline.run_pipeline(args.mode)
     
     # Print summary
-    end_time = datetime.now()
-    duration = (end_time - start_time).total_seconds()
+    logger.info("\n" + "="*50)
+    logger.info("📊 ML PIPELINE SUMMARY")
+    logger.info("="*50)
     
-    logger.info("\n🎉 Pipeline Complete!")
-    logger.info(f"Step: {args.step}")
-    logger.info(f"Mode: {args.mode}")
-    logger.info(f"Domains: {', '.join(args.domains)}")
-    logger.info(f"Duration: {duration:.1f}s")
-    logger.info(f"Setups processed: {len(setup_ids)}")
+    # Print results
+    for category, items in results.items():
+        logger.info(f"\n{category.upper()}:")
+        for key, value in items.items():
+            logger.info(f"- {key}: {value}")
+    
+    logger.info("\n" + "="*50)
+    logger.info("✅ Pipeline completed successfully")
+    logger.info("="*50)
 
 if __name__ == "__main__":
     main() 

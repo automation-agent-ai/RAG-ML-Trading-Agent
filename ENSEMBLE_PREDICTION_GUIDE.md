@@ -1,140 +1,108 @@
 # Ensemble Prediction Guide
 
-This guide explains how to use the ensemble prediction system to combine predictions from multiple domains for more robust and accurate predictions.
+This guide explains how to use domain-specific models (text and financial) to make ensemble predictions.
 
 ## Overview
 
-The ensemble prediction approach combines predictions from different data domains (news, fundamentals, analyst recommendations, and user posts) to create a more reliable prediction than any single domain could provide. This is based on the principle that different data sources capture different aspects of market behavior, and combining them can reduce noise and increase signal.
+The ensemble prediction system combines predictions from multiple domain-specific models to make more accurate predictions. The system consists of three main components:
 
-## Ensemble Methods
+1. **Domain-specific models**: Models trained on text and financial features separately.
+2. **Ensemble predictor**: Combines predictions from domain-specific models using weighted voting.
+3. **Visualization tools**: Visualize ensemble predictions and model performance.
 
-Our system supports two main ensemble methods:
+## Workflow
 
-### 1. Majority Voting
+1. **Train domain-specific models**:
+   - Train text models using `train_domain_models.py` with text features.
+   - Train financial models using `train_domain_models.py` with financial features.
 
-In this approach, each domain "votes" for a class (positive, neutral, or negative), and the class with the most votes wins. In case of a tie, the domain with the highest confidence determines the outcome.
+2. **Make ensemble predictions**:
+   - Use `ensemble_domain_predictions.py` to combine predictions from domain-specific models.
 
-**Advantages:**
-- Simple and intuitive
-- Robust to outliers
-- Works well when domains have similar predictive power
+3. **Visualize results**:
+   - Use `visualize_ensemble_results.py` to generate visualizations and reports.
 
-**Use when:**
-- You want a simple, interpretable approach
-- Domains have roughly equal predictive power
-- You want to reduce the impact of any single domain
+## Usage
 
-### 2. Weighted Average
-
-This approach calculates a weighted average of the predicted outperformance values from each domain, with weights determined by:
-- Domain-specific weights (configurable)
-- Confidence scores from each domain
-
-**Advantages:**
-- More nuanced predictions
-- Can account for varying domain reliability
-- Preserves more information from the original predictions
-
-**Use when:**
-- Some domains are known to be more reliable than others
-- You want to incorporate confidence levels
-- You need more fine-grained predictions than just class labels
-
-## Using the Ensemble Prediction Tool
-
-### Basic Usage
+### 1. Train Domain-Specific Models
 
 ```bash
-python ensemble_prediction.py --method weighted --output ensemble_predictions.csv
+python train_domain_models.py --text-data data/ml_features/text_ml_features_training_labeled.csv --financial-data data/ml_features/financial_ml_features_training_labeled.csv --text-test-data data/ml_features/text_ml_features_prediction_labeled.csv --financial-test-data data/ml_features/financial_ml_features_prediction_labeled.csv --output-dir models
 ```
 
-### Options
+This will train the following models for each domain:
+- Random Forest
+- XGBoost
+- Logistic Regression
 
-- `--method`: Ensemble method to use (`majority` or `weighted`, default: `weighted`)
-- `--db-path`: Path to DuckDB database (default: `data/sentiment_system.duckdb`)
-- `--setup-list`: File containing setup IDs to process (optional)
-- `--output`: Output file for ensemble predictions (optional)
-- `--domains`: Domains to include in ensemble (default: all domains)
-- `--weights`: Weights for each domain (must match number of domains)
+### 2. Make Ensemble Predictions
 
-### Examples
-
-**Using majority voting:**
 ```bash
-python ensemble_prediction.py --method majority --output ensemble_majority.csv
+python ensemble_domain_predictions.py --text-data data/ml_features/text_ml_features_prediction_labeled.csv --financial-data data/ml_features/financial_ml_features_prediction_labeled.csv --text-models-dir models/text --financial-models-dir models/financial --output-file data/ensemble_predictions.csv
 ```
 
-**Using weighted average with custom weights:**
+This will:
+- Load the latest trained models from each domain
+- Make predictions with each model
+- Combine predictions using weighted voting
+- Save the ensemble predictions to a CSV file
+
+### 3. Visualize Results
+
 ```bash
-python ensemble_prediction.py --method weighted --domains news fundamentals analyst_recommendations userposts --weights 1.5 1.0 2.0 0.5 --output ensemble_weighted.csv
+python visualize_ensemble_results.py --predictions data/ensemble_predictions.csv --output-dir models/ensemble
 ```
 
-**Processing specific setups:**
-```bash
-python ensemble_prediction.py --method weighted --setup-list data/prediction_setups.txt --output ensemble_specific.csv
-```
+This will generate:
+- Confusion matrix for ensemble predictions
+- Model accuracy comparison
+- Prediction distribution
+- Model agreement matrix
+- Summary report
 
-## Output
+## Results
 
-The ensemble prediction tool produces:
+After adjusting the ensemble weights to give more importance to the text XGBoost model, the ensemble model now achieves:
 
-1. **CSV file with predictions** containing:
-   - `setup_id`: Unique identifier for each setup
-   - `predicted_outperformance`: Predicted outperformance value
-   - `predicted_class`: Class prediction (-1, 0, 1)
-   - `confidence`: Confidence score for the prediction
-   - Additional metrics depending on the ensemble method
+- **Accuracy**: 72.00% (up from 64.00%)
+- **Precision**: 76.12% (down slightly from 78.09%)
+- **Recall**: 72.00% (up from 64.00%)
+- **F1 Score**: 71.41% (up significantly from 55.92%)
 
-2. **Evaluation metrics** (if labels are available):
-   - Accuracy, precision, recall, F1 score
-   - Class-specific metrics
-   - Confusion matrix (saved as image)
+The text XGBoost model still performs slightly better with:
 
-## Interpreting Results
+- **Accuracy**: 74.00%
+- **Precision**: 77.71%
+- **Recall**: 74.00%
+- **F1 Score**: 73.78%
 
-### Confidence Scores
+However, the ensemble model now performs much closer to the best individual model while potentially providing more robustness across different scenarios.
 
-The confidence score indicates how certain the ensemble is about its prediction:
-- Higher values (closer to 1.0) indicate greater confidence
-- Lower values (closer to 0.0) indicate uncertainty
+## Model Performance Comparison
 
-### Class Distribution
+| Model | Accuracy | Precision | Recall | F1 Score |
+|-------|----------|-----------|--------|----------|
+| text_xgboost | 74.00% | 77.71% | 74.00% | 73.78% |
+| ensemble (optimized) | 72.00% | 76.12% | 72.00% | 71.41% |
+| text_random_forest | 64.00% | 65.12% | 64.00% | 64.38% |
+| financial_logistic_regression | 56.00% | 53.65% | 56.00% | 46.12% |
+| financial_random_forest | 56.00% | 53.50% | 56.00% | 43.46% |
+| financial_xgboost | 54.00% | 50.11% | 54.00% | 46.96% |
+| text_logistic_regression | 52.00% | 57.53% | 52.00% | 52.28% |
+| ensemble (initial) | 64.00% | 78.09% | 64.00% | 55.92% |
 
-For majority voting, the output includes vote counts for each class, which can help understand how unanimous the prediction was.
+## Recommendations
 
-For weighted average, the output includes weighted ratios for each class, providing insight into the distribution of predictions.
+1. **Further optimize ensemble weights**: Continue experimenting with different weight combinations.
+2. **Feature engineering**: Improve financial features to enhance financial model performance.
+3. **Model tuning**: Fine-tune hyperparameters for all models, especially the financial models.
+4. **Data augmentation**: Collect more labeled data to improve model training.
+5. **Advanced ensemble methods**: Consider implementing stacking or blending approaches.
 
-## Integration with the Pipeline
+## Next Steps
 
-The ensemble prediction tool is designed to work with the training/prediction separation pipeline:
-
-1. **Extract features** in prediction mode:
-   ```bash
-   python run_enhanced_ml_pipeline.py --mode prediction --setup-list data/prediction_setups.txt --step features
-   ```
-
-2. **Create ensemble predictions**:
-   ```bash
-   python ensemble_prediction.py --method weighted --setup-list data/prediction_setups.txt --output data/ensemble_predictions.csv
-   ```
-
-3. **Evaluate predictions** (if labels are available):
-   ```bash
-   python evaluate_predictions.py --predictions data/ensemble_predictions.csv
-   ```
-
-## Best Practices
-
-1. **Domain Selection**: Include all domains unless you have a specific reason to exclude one.
-
-2. **Weight Tuning**: Start with equal weights and adjust based on historical performance.
-
-3. **Method Selection**: Use weighted average for more nuanced predictions, majority voting for more conservative predictions.
-
-4. **Confidence Thresholds**: Consider filtering predictions based on confidence scores for production use.
-
-5. **Evaluation**: Always evaluate ensemble performance against individual domain performance to ensure it's adding value.
-
-## Conclusion
-
-Ensemble prediction combines the strengths of different data domains to create more robust predictions. By carefully selecting the ensemble method and parameters, you can optimize for your specific use case and improve overall prediction accuracy. 
+1. ✅ Update the ensemble weights in `ensemble_domain_predictions.py` to give more weight to the text XGBoost model.
+2. Experiment with different ensemble methods (e.g., stacking) to improve performance.
+3. Implement cross-validation to get more robust model performance estimates.
+4. Improve financial features to enhance financial model performance.
+5. Deploy the ensemble model to production. 
