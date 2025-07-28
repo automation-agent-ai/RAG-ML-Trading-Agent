@@ -224,7 +224,8 @@ class CategoryClassifier:
             "governance": 0,
             "corporate_events": 0,
             "other_signals": 0
-        }
+        ,
+            "director_dealings": 0}
         
     def classify_headline(self, headline: str) -> str:
         """
@@ -241,17 +242,23 @@ class CategoryClassifier:
         # Try fast pattern matching first
         category = self._fast_pattern_match(headline)
         if category:
+            if category not in self.category_counts:
+                self.category_counts[category] = 0
             self.category_counts[category] += 1
             return category
             
         # Try fuzzy matching next
         category = self._fuzzy_match(headline)
         if category:
+            if category not in self.category_counts:
+                self.category_counts[category] = 0
             self.category_counts[category] += 1
             return category
             
         # Fall back to LLM classification
         category = self._llm_classify(headline)
+        if category not in self.category_counts:
+            self.category_counts[category] = 0
         self.category_counts[category] += 1
         return category
     
