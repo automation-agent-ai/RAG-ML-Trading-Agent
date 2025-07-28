@@ -28,18 +28,26 @@ The optimized workflow is designed to:
 └─────────────────┘     └─────────────────┘     └────────┬────────┘
                                                          │
                                                          ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│                 │     │                 │     │                 │
-│  16. Restore    │◀────│  15. Evaluate   │◀────│  4. Reset       │
-│  Data           │     │  Predictions    │     │  Similarity     │
-│  (when needed)  │     │                 │     │  Features       │
-└─────────────────┘     └─────────────────┘     └────────┬────────┘
-                                                         │
-                                                         ▼
+                                               ┌─────────────────┐
+                                               │                 │
+                                               │  4. Reset       │
+                                               │  Similarity     │
+                                               │  Features       │
+                                               └────────┬────────┘
+                                                        │
+                                                        ▼
                                                ┌─────────────────┐
                                                │                 │
                                                │  5. Create      │
                                                │  Prediction     │
+                                               │  Embeddings     │
+                                               └────────┬────────┘
+                                                        │
+                                                        ▼
+                                               ┌─────────────────┐
+                                               │                 │
+                                               │  6. Create      │
+                                               │  Training       │
                                                │  Embeddings     │
                                                └────────┬────────┘
                                                         │
@@ -70,10 +78,34 @@ The optimized workflow is designed to:
                                                         ▼                       ▼
                                                ┌─────────────────┐     ┌─────────────────┐
                                                │                 │     │                 │
-                                               │  11. Train ML   │────▶│  12. Generate   │
-                                               │  Models         │     │  Results Table  │
+                                               │  11. Train ML   │────▶│  12. Make ML    │
+                                               │  Models         │     │  Ensemble       │
+                                               │                 │     │  Predictions    │
+                                               └─────────────────┘     └────────┬────────┘
+                                                                                │
+                                                                                ▼
+                                               ┌─────────────────┐     ┌─────────────────┐
                                                │                 │     │                 │
-                                               └─────────────────┘     └─────────────────┘
+                                               │  13. Generate   │────▶│  14. Visualize  │
+                                               │  Results Table  │     │  Results        │
+                                               │                 │     │                 │
+                                               └─────────────────┘     └────────┬────────┘
+                                                                                │
+                                                                                ▼
+                                               ┌─────────────────┐     ┌─────────────────┐
+                                               │                 │     │                 │
+                                               │  15. Evaluate   │────▶│  16. Preserve   │
+                                               │  Predictions    │     │  & Restore      │
+                                               │                 │     │  Embeddings     │
+                                               └─────────────────┘     └────────┬────────┘
+                                                                                │
+                                                                                ▼
+                                                                      ┌─────────────────┐
+                                                                      │                 │
+                                                                      │  17. Restore    │
+                                                                      │  Data           │
+                                                                      │  (when needed)  │
+                                                                      └─────────────────┘
 ```
 
 ## Preparation: Offline Model Caching (Recommended)
@@ -174,6 +206,22 @@ python run_enhanced_ml_pipeline.py --mode prediction --setup-list data/predictio
 **What it does:**
 - Creates embeddings for the specified setups in prediction mode
 - Stores them in separate `{domain}_embeddings_prediction` tables
+- Does NOT make predictions yet (this will happen after thresholds are determined)
+
+**Note:** This step only creates embeddings, not predictions. Predictions will be made later using consistent thresholds.
+
+### 6. Create Training Embeddings
+
+Create new embeddings for the training setups (without making predictions yet).
+
+```bash
+conda activate sts
+python run_enhanced_ml_pipeline.py --mode training --setup-list data/training_setups.txt --domains all --embeddings-only
+```
+
+**What it does:**
+- Creates embeddings for the specified setups in training mode
+- Stores them in separate `{domain}_embeddings_training` tables
 - Does NOT make predictions yet (this will happen after thresholds are determined)
 
 **Note:** This step only creates embeddings, not predictions. Predictions will be made later using consistent thresholds.
@@ -358,7 +406,21 @@ python visualize_ensemble_results.py --input data/predictions/ensemble_predictio
 - Calculates and visualizes performance metrics
 - Creates model comparison charts
 
-### 15. Preserve and Restore Embeddings (Optional)
+### 15. Evaluate Predictions
+
+Evaluate the performance of the ML ensemble predictions:
+
+```bash
+conda activate sts
+python evaluate_predictions.py --input data/predictions/ensemble_predictions_*.csv --output data/evaluation_results.csv
+```
+
+**What it does:**
+- Loads the ensemble predictions
+- Calculates various performance metrics (Accuracy, Precision, Recall, F1 Score, Confusion Matrix)
+- Saves the evaluation results to a CSV file
+
+### 16. Preserve and Restore Embeddings (Optional)
 
 If you want to preserve prediction embeddings and later restore them to the training set (after labels become available):
 
@@ -386,7 +448,7 @@ python preserve_restore_embeddings.py --action restore --domains all --setup-lis
   - Updates LanceDB tables if applicable
   - This enables continuous learning by incorporating new labeled data into the training set
 
-### 16. Restore Data (When Needed)
+### 17. Restore Data (When Needed)
 
 When you're ready to return to training with the full dataset:
 
