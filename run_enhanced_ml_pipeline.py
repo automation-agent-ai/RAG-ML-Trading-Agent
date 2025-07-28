@@ -267,24 +267,40 @@ class EnhancedPipeline:
             
             for domain, setups in extraction_results.items():
                 for setup_id, result in setups.items():
+                    # Skip if result is None
+                    if result is None:
+                        continue
+                        
+                    prediction = None
+                    
                     # Get prediction method based on domain
                     if domain == 'news' and self.news_agent:
                         content = result.synthetic_summary_financial_results if hasattr(result, 'synthetic_summary_financial_results') else ""
                         if content:
-                            prediction = self.news_agent.predict_via_similarity(content)
+                            try:
+                                prediction = self.news_agent.predict_via_similarity(content)
+                            except Exception as e:
+                                logger.warning(f"Error getting news prediction for {setup_id}: {e}")
                     elif domain == 'fundamentals' and self.fundamentals_agent:
                         content = f"ROA: {result.roa if hasattr(result, 'roa') else 'N/A'}, ROE: {result.roe if hasattr(result, 'roe') else 'N/A'}"
-                        prediction = self.fundamentals_agent.predict_via_similarity(content)
+                        try:
+                            prediction = self.fundamentals_agent.predict_via_similarity(content)
+                        except Exception as e:
+                            logger.warning(f"Error getting fundamentals prediction for {setup_id}: {e}")
                     elif domain == 'analyst' and self.analyst_agent:
                         content = result.synthetic_summary if hasattr(result, 'synthetic_summary') else ""
                         if content:
-                            prediction = self.analyst_agent.predict_via_similarity(content)
+                            try:
+                                prediction = self.analyst_agent.predict_via_similarity(content)
+                            except Exception as e:
+                                logger.warning(f"Error getting analyst prediction for {setup_id}: {e}")
                     elif domain == 'userposts' and self.userposts_agent:
                         content = result.synthetic_summary if hasattr(result, 'synthetic_summary') else ""
                         if content:
-                            prediction = self.userposts_agent.predict_via_similarity(content)
-                    else:
-                        continue
+                            try:
+                                prediction = self.userposts_agent.predict_via_similarity(content)
+                            except Exception as e:
+                                logger.warning(f"Error getting userposts prediction for {setup_id}: {e}")
                     
                     # Create row if prediction exists
                     if prediction:

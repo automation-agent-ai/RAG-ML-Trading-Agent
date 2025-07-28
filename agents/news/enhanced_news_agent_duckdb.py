@@ -954,7 +954,7 @@ class EnhancedNewsAgentDuckDB:
             features['count'] = len(news_items)
             
             # In prediction mode, enhance with similarity features
-            if mode == "prediction" and self.training_table is not None:
+            if mode == "prediction" and hasattr(self, "training_table") and self.training_table is not None:
                 similarity_features = self._compute_group_similarity_features(group_name, news_items)
                 features.update(similarity_features)
             
