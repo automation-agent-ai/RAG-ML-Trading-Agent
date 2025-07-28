@@ -15,6 +15,7 @@ import logging
 import duckdb
 import pandas as pd
 import numpy as np
+import glob
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
@@ -47,14 +48,28 @@ class LabelAdder:
     
     def load_data(self, file_path: str) -> pd.DataFrame:
         """
-        Load ML features from CSV
+        Load ML features from CSV, handling wildcards
         
         Args:
-            file_path: Path to CSV file
+            file_path: Path to CSV file (can include wildcards)
             
         Returns:
             DataFrame with ML features
         """
+        logger.info(f"Looking for files matching: {file_path}")
+        
+        # Handle wildcards using glob
+        if '*' in file_path or '?' in file_path:
+            matching_files = glob.glob(file_path)
+            if not matching_files:
+                raise FileNotFoundError(f"No files found matching pattern: {file_path}")
+            
+            # Sort by modification time (newest first)
+            matching_files.sort(key=os.path.getmtime, reverse=True)
+            file_path = matching_files[0]
+            logger.info(f"Using most recent file: {file_path}")
+        
+        # Load the CSV file
         logger.info(f"Loading ML features from {file_path}")
         df = pd.read_csv(file_path)
         
@@ -254,7 +269,7 @@ def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Add labels to ML feature tables')
     parser.add_argument('--input', required=True,
-                       help='Path to input ML features CSV')
+                       help='Path to input ML features CSV (can include wildcards)')
     parser.add_argument('--output',
                        help='Path to output labeled features CSV')
     parser.add_argument('--db-path', default='data/sentiment_system.duckdb',

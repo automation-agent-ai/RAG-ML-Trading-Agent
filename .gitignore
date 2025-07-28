@@ -43,6 +43,19 @@ data/storage_lancedb_store/
 lancedb_store/
 storage/lancedb_store/
 
+# CSV files - exclude only those with 20250727 in name
+*.csv
+!*20250727*.csv
+
+# Output directories
+data/ml_pipeline_output/
+data/ml_features/
+data/predictions/
+data/results/
+data/visualizations/
+models/text/
+models/financial/
+
 # IDE
 .idea/
 .vscode/

@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 import subprocess
 import json
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -59,10 +60,49 @@ class CompletePipeline:
         self.models_dir = self.output_dir / "models"
         self.predictions_dir = self.output_dir / "predictions"
         self.results_dir = self.output_dir / "results"
+        self.visualizations_dir = self.output_dir / "visualizations"
         
         for directory in [self.features_dir, self.labeled_dir, self.balanced_dir, 
-                         self.models_dir, self.predictions_dir, self.results_dir]:
+                         self.models_dir, self.predictions_dir, self.results_dir,
+                         self.visualizations_dir]:
             directory.mkdir(exist_ok=True, parents=True)
+    
+    def check_database_access(self, max_retries: int = 3, retry_delay: int = 5) -> bool:
+        """
+        Check if the database is accessible
+        
+        Args:
+            max_retries: Maximum number of retries
+            retry_delay: Delay between retries in seconds
+            
+        Returns:
+            True if database is accessible, False otherwise
+        """
+        logger.info(f"Checking database access: {self.db_path}")
+        
+        for attempt in range(max_retries):
+            try:
+                # Try to connect to the database
+                conn = duckdb.connect(self.db_path, read_only=True)
+                
+                # Run a simple query to verify access
+                conn.execute("SELECT 1").fetchone()
+                
+                # Close connection
+                conn.close()
+                
+                logger.info("✅ Database is accessible")
+                return True
+            
+            except Exception as e:
+                logger.warning(f"❌ Database access failed (attempt {attempt+1}/{max_retries}): {str(e)}")
+                
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+        
+        logger.error("❌ Database is not accessible after maximum retries")
+        return False
     
     def run_command(self, command: str) -> Tuple[int, str]:
         """
@@ -106,25 +146,59 @@ class CompletePipeline:
         
         return return_code, "\n".join(output)
     
-    def extract_features(self, mode: str = "training") -> Dict[str, str]:
+    def create_setup_lists(self) -> Dict[str, str]:
+        """
+        Create setup lists for training and prediction
+        
+        Returns:
+            Dictionary with paths to setup list files
+        """
+        logger.info("Creating setup lists for training and prediction")
+        
+        # Check if prediction setups file exists
+        prediction_file = "data/prediction_setups.txt"
+        if not os.path.exists(prediction_file):
+            # Create prediction setups file
+            logger.info("Creating prediction setups file")
+            create_prediction_cmd = f"python create_prediction_list.py --count 100 --output {prediction_file}"
+            self.run_command(create_prediction_cmd)
+        else:
+            logger.info(f"Using existing prediction setups file: {prediction_file}")
+        
+        # Create training setups file
+        training_file = "data/training_setups.txt"
+        logger.info("Creating training setups file")
+        create_training_cmd = f"python create_training_list.py --prediction-file {prediction_file} --output {training_file}"
+        self.run_command(create_training_cmd)
+        
+        return {
+            "training_setups": training_file,
+            "prediction_setups": prediction_file
+        }
+    
+    def extract_features(self, mode: str = "training", setup_file: str = None) -> Dict[str, str]:
         """
         Extract ML features from DuckDB
         
         Args:
             mode: Mode ('training' or 'prediction')
+            setup_file: Path to setup list file
             
         Returns:
             Dictionary with paths to extracted feature files
         """
         logger.info(f"Extracting {mode} features")
         
+        # Use provided setup file or default
+        if setup_file is None:
+            setup_file = f"data/{mode}_setups.txt"
+        
         # Extract text features
-        text_setup_file = f"data/{mode}_setups.txt"
-        text_features_cmd = f"python extract_text_features.py --mode {mode} --setup-list {text_setup_file} --output-dir {self.features_dir}"
+        text_features_cmd = f"python extract_text_features_from_duckdb.py --mode {mode} --setup-list {setup_file} --output-dir {self.features_dir}"
         self.run_command(text_features_cmd)
         
         # Extract financial features
-        financial_features_cmd = f"python extract_financial_features_from_duckdb.py --mode {mode} --setup-list {text_setup_file} --output-dir {self.features_dir}"
+        financial_features_cmd = f"python extract_financial_features_from_duckdb.py --mode {mode} --setup-list {setup_file} --output-dir {self.features_dir}"
         self.run_command(financial_features_cmd)
         
         # Find the most recent feature files
@@ -151,7 +225,7 @@ class CompletePipeline:
     
     def add_labels(self, feature_files: Dict[str, str], mode: str = "training") -> Dict[str, str]:
         """
-        Add labels to ML features
+        Add labels to ML features using dynamic percentile thresholds for balanced classes
         
         Args:
             feature_files: Dictionary with paths to feature files
@@ -178,6 +252,8 @@ class CompletePipeline:
         financial_labeled_file = str(self.labeled_dir / f"financial_ml_features_{mode}_labeled.csv")
         financial_labels_cmd = f"python add_labels_to_features.py --input {financial_file} --output {financial_labeled_file} --mode {mode}"
         self.run_command(financial_labels_cmd)
+        
+        logger.info(f"Labels added using dynamic thresholds for balanced classes (-1, 0, 1 format)")
         
         return {
             "text_labeled": text_labeled_file,
@@ -231,6 +307,8 @@ class CompletePipeline:
             logger.error("Failed to find balanced files")
             return {}
         
+        logger.info("Datasets balanced with consistent setup_ids and label format")
+        
         return {
             "text_balanced_train": str(text_train_files[0]),
             "financial_balanced_train": str(financial_train_files[0]),
@@ -240,7 +318,7 @@ class CompletePipeline:
     
     def train_models(self, balanced_files: Dict[str, str]) -> Dict[str, str]:
         """
-        Train ML models
+        Train ML models using cross-validation
         
         Args:
             balanced_files: Dictionary with paths to balanced feature files
@@ -248,7 +326,7 @@ class CompletePipeline:
         Returns:
             Dictionary with paths to trained model directories
         """
-        logger.info("Training ML models")
+        logger.info("Training ML models with cross-validation")
         
         text_train = balanced_files.get("text_balanced_train")
         financial_train = balanced_files.get("financial_balanced_train")
@@ -259,13 +337,15 @@ class CompletePipeline:
         
         # Train text models
         text_models_dir = str(self.models_dir / "text")
-        text_train_cmd = f"python train_domain_models_cv.py --input {text_train} --domain text --output-dir {text_models_dir}"
+        text_train_cmd = f"python train_domain_models_cv.py --input {text_train} --domain text --output-dir {text_models_dir} --exclude-cols outperformance_10d --cv-folds 5"
         self.run_command(text_train_cmd)
         
         # Train financial models
         financial_models_dir = str(self.models_dir / "financial")
-        financial_train_cmd = f"python train_domain_models_cv.py --input {financial_train} --domain financial --output-dir {financial_models_dir}"
+        financial_train_cmd = f"python train_domain_models_cv.py --input {financial_train} --domain financial --output-dir {financial_models_dir} --exclude-cols outperformance_10d --cv-folds 5"
         self.run_command(financial_train_cmd)
+        
+        logger.info("Models trained with cross-validation, excluding outperformance_10d to prevent target leakage")
         
         return {
             "text_models": text_models_dir,
@@ -283,7 +363,7 @@ class CompletePipeline:
         Returns:
             Dictionary with paths to prediction files
         """
-        logger.info("Making predictions")
+        logger.info("Making ensemble predictions from domain models")
         
         text_predict = balanced_files.get("text_balanced_predict")
         financial_predict = balanced_files.get("financial_balanced_predict")
@@ -322,7 +402,8 @@ class CompletePipeline:
     
     def generate_results(self, prediction_files: Dict[str, str]) -> Dict[str, str]:
         """
-        Generate final results table and visualizations
+        Generate comprehensive results table combining ML predictions, 
+        agent ensemble predictions, and actual labels
         
         Args:
             prediction_files: Dictionary with paths to prediction files
@@ -330,7 +411,7 @@ class CompletePipeline:
         Returns:
             Dictionary with paths to results files
         """
-        logger.info("Generating results")
+        logger.info("Generating comprehensive results table")
         
         ensemble_predictions = prediction_files.get("ensemble_predictions")
         
@@ -340,19 +421,41 @@ class CompletePipeline:
         
         # Generate results table
         results_table_file = str(self.results_dir / "results_table.csv")
-        results_cmd = f"python generate_results_table.py --input {ensemble_predictions} --output {results_table_file}"
+        results_cmd = f"python generate_results_table.py --input {ensemble_predictions} --output {results_table_file} --db-path {self.db_path}"
         self.run_command(results_cmd)
         
-        # Generate visualizations
-        visualizations_dir = str(self.results_dir / "visualizations")
-        Path(visualizations_dir).mkdir(exist_ok=True, parents=True)
-        
-        viz_cmd = f"python visualize_ensemble_results.py --input {ensemble_predictions} --output-dir {visualizations_dir}"
-        self.run_command(viz_cmd)
+        logger.info(f"Comprehensive results table generated with ML predictions and agent predictions")
         
         return {
-            "results_table": results_table_file,
-            "visualizations_dir": visualizations_dir
+            "results_table": results_table_file
+        }
+    
+    def visualize_results(self, prediction_files: Dict[str, str]) -> Dict[str, str]:
+        """
+        Generate visualizations for ensemble results
+        
+        Args:
+            prediction_files: Dictionary with paths to prediction files
+            
+        Returns:
+            Dictionary with paths to visualization files
+        """
+        logger.info("Generating visualizations for ensemble results")
+        
+        ensemble_predictions = prediction_files.get("ensemble_predictions")
+        
+        if not ensemble_predictions:
+            logger.error("Missing ensemble predictions file")
+            return {}
+        
+        # Generate visualizations
+        viz_cmd = f"python visualize_ensemble_results.py --input {ensemble_predictions} --output-dir {self.visualizations_dir}"
+        self.run_command(viz_cmd)
+        
+        logger.info(f"Visualizations generated in {self.visualizations_dir}")
+        
+        return {
+            "visualizations_dir": str(self.visualizations_dir)
         }
     
     def run_pipeline(self, mode: str = "all") -> Dict[str, Any]:
@@ -367,36 +470,58 @@ class CompletePipeline:
         """
         logger.info(f"Running complete ML pipeline in {mode} mode")
         
+        # Check database access
+        if not self.check_database_access():
+            logger.error("Database is not accessible, aborting pipeline")
+            return {"error": "Database not accessible"}
+        
         results = {}
         
-        # Extract features
-        if mode in ["training", "all"]:
-            training_features = self.extract_features(mode="training")
+        # Create setup lists for training and prediction
+        if mode == "all":
+            setup_files = self.create_setup_lists()
+            results["setup_files"] = setup_files
+            
+            # Extract features
+            training_features = self.extract_features(mode="training", setup_file=setup_files["training_setups"])
             results["training_features"] = training_features
-        
-        if mode in ["prediction", "all"]:
-            prediction_features = self.extract_features(mode="prediction")
+            
+            prediction_features = self.extract_features(mode="prediction", setup_file=setup_files["prediction_setups"])
             results["prediction_features"] = prediction_features
+        else:
+            # Extract features for specific mode
+            if mode == "training":
+                training_features = self.extract_features(mode="training")
+                results["training_features"] = training_features
+            
+            if mode == "prediction":
+                prediction_features = self.extract_features(mode="prediction")
+                results["prediction_features"] = prediction_features
         
         # Add labels
-        if mode in ["training", "all"]:
+        if mode in ["training", "all"] and "training_features" in results and results["training_features"]:
             training_labeled = self.add_labels(results["training_features"], mode="training")
             results["training_labeled"] = training_labeled
         
-        if mode in ["prediction", "all"]:
+        if mode in ["prediction", "all"] and "prediction_features" in results and results["prediction_features"]:
             prediction_labeled = self.add_labels(results["prediction_features"], mode="prediction")
             results["prediction_labeled"] = prediction_labeled
         
         # Balance datasets
         if mode == "all":
-            labeled_files = {
-                "text_labeled_train": results["training_labeled"]["text_labeled"],
-                "financial_labeled_train": results["training_labeled"]["financial_labeled"],
-                "text_labeled_predict": results["prediction_labeled"]["text_labeled"],
-                "financial_labeled_predict": results["prediction_labeled"]["financial_labeled"]
-            }
-            balanced_files = self.balance_datasets(labeled_files)
-            results["balanced_files"] = balanced_files
+            # Check if we have both training and prediction labeled files
+            if "training_labeled" in results and "prediction_labeled" in results:
+                labeled_files = {
+                    "text_labeled_train": results["training_labeled"]["text_labeled"],
+                    "financial_labeled_train": results["training_labeled"]["financial_labeled"],
+                    "text_labeled_predict": results["prediction_labeled"]["text_labeled"],
+                    "financial_labeled_predict": results["prediction_labeled"]["financial_labeled"]
+                }
+                balanced_files = self.balance_datasets(labeled_files)
+                results["balanced_files"] = balanced_files
+            else:
+                logger.warning("Missing labeled files, skipping dataset balancing")
+                return results
             
             # Train models
             model_dirs = self.train_models(balanced_files)
@@ -409,6 +534,10 @@ class CompletePipeline:
             # Generate results
             results_files = self.generate_results(prediction_files)
             results["results_files"] = results_files
+            
+            # Visualize results
+            visualization_files = self.visualize_results(prediction_files)
+            results["visualization_files"] = visualization_files
         
         logger.info("Pipeline completed successfully")
         return results
@@ -451,6 +580,13 @@ def main():
     logger.info("\n" + "="*50)
     logger.info("✅ Pipeline completed successfully")
     logger.info("="*50)
+    
+    # Print column consistency reminder
+    logger.info("\nIMPORTANT REMINDER:")
+    logger.info("Ensure that training and prediction feature tables have the same columns in the same order.")
+    logger.info("The balance_ml_datasets.py script helps maintain this consistency.")
+    logger.info("If you encounter column mismatch errors during prediction, check that the feature extraction")
+    logger.info("process completed successfully and the datasets were properly balanced.")
 
 if __name__ == "__main__":
     main() 
