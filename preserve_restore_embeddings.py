@@ -245,7 +245,7 @@ class EmbeddingManager:
         elif action == 'restore':
             logger.info(f"Restoring embeddings for {len(setup_ids)} setup IDs across {len(domains)} domains")
             self.restore_embeddings(domains, setup_ids)
-        else:
+                        else:
             logger.error(f"Unknown action: {action}")
 
 def main():

@@ -76,7 +76,7 @@ class DomainModelTrainer:
         
     def load_data(self) -> Tuple[pd.DataFrame, pd.Series]:
         """Load data from CSV
-        
+            
         Returns:
             Tuple of (features, labels)
         """
@@ -92,7 +92,7 @@ class DomainModelTrainer:
         y = df[self.label_col].copy()
         
         return X, y
-        
+    
     def train_models_with_cv(
         self,
         X: pd.DataFrame,
@@ -231,22 +231,22 @@ class DomainModelTrainer:
         """
         if model_name == 'random_forest':
             return Pipeline([
-                ('imputer', SimpleImputer(strategy='median')),
-                ('scaler', StandardScaler()),
-                ('classifier', RandomForestClassifier(
-                    n_estimators=100,
+                    ('imputer', SimpleImputer(strategy='median')),
+                    ('scaler', StandardScaler()),
+                    ('classifier', RandomForestClassifier(
+                        n_estimators=100,
                     max_depth=None,
                     min_samples_split=2,
                     min_samples_leaf=1,
-                    random_state=self.random_state
-                ))
-            ])
+                        random_state=self.random_state
+                    ))
+                ])
         elif model_name == 'xgboost':
             return Pipeline([
-                ('imputer', SimpleImputer(strategy='median')),
-                ('scaler', StandardScaler()),
+                        ('imputer', SimpleImputer(strategy='median')),
+                        ('scaler', StandardScaler()),
                 ('classifier', xgb.XGBClassifier(
-                    n_estimators=100,
+                            n_estimators=100,
                     max_depth=3,
                     learning_rate=0.1,
                     random_state=self.random_state,
@@ -256,16 +256,16 @@ class DomainModelTrainer:
             ])
         elif model_name == 'logistic_regression':
             return Pipeline([
-                ('imputer', SimpleImputer(strategy='median')),
-                ('scaler', StandardScaler()),
-                ('classifier', LogisticRegression(
+                    ('imputer', SimpleImputer(strategy='median')),
+                    ('scaler', StandardScaler()),
+                    ('classifier', LogisticRegression(
                     C=1.0,
                     penalty='l2',
                     solver='liblinear',
                     multi_class='ovr',
-                    random_state=self.random_state
-                ))
-            ])
+                        random_state=self.random_state
+                    ))
+                ])
         else:
             raise ValueError(f"Unknown model: {model_name}")
     
@@ -375,7 +375,7 @@ class FinancialModelTrainer(DomainModelTrainer):
                 preprocessor = FinancialPreprocessor()
                 
                 # Check if preprocessing parameters are available
-                if preprocessor.has_saved_parameters():
+                if hasattr(preprocessor, 'has_saved_parameters') and preprocessor.has_saved_parameters():
                     logger.info("Applying saved financial preprocessing parameters")
                     X = preprocessor.apply_preprocessing(X)
                 else:
@@ -389,8 +389,8 @@ class FinancialModelTrainer(DomainModelTrainer):
 
 
 def train_and_evaluate(
-    text_data: str,
-    financial_data: str,
+    text_data: Optional[str] = None,
+    financial_data: Optional[str] = None,
     text_test_data: Optional[str] = None,
     financial_test_data: Optional[str] = None,
     output_dir: str = 'models',
@@ -405,8 +405,8 @@ def train_and_evaluate(
     """Train and evaluate domain models
     
     Args:
-        text_data: Path to text ML features CSV
-        financial_data: Path to financial ML features CSV
+        text_data: Path to text ML features CSV (optional)
+        financial_data: Path to financial ML features CSV (optional)
         text_test_data: Path to text ML features test CSV (optional)
         financial_test_data: Path to financial ML features test CSV (optional)
         output_dir: Directory to save trained models
@@ -422,97 +422,107 @@ def train_and_evaluate(
         Dictionary of trained models and evaluation results
     """
     # Create output directories
-    os.makedirs(os.path.join(output_dir, 'text'), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'financial'), exist_ok=True)
-    
-    # Initialize trainers
-    text_trainer = TextModelTrainer(
-        data_path=text_data,
-        output_dir=output_dir,
-        label_col=label_col,
-        exclude_cols=exclude_cols,
-        models=models,
-        cv_folds=cv_folds,
-        scoring=scoring,
-        random_state=random_state
-    )
-    
-    financial_trainer = FinancialModelTrainer(
-        data_path=financial_data,
-        output_dir=output_dir,
-        label_col=label_col,
-        exclude_cols=exclude_cols,
-        models=models,
-        cv_folds=cv_folds,
-        scoring=scoring,
-        random_state=random_state,
-        disable_saved_preprocessing=disable_saved_preprocessing
-    )
-    
-    # Load data
-    X_text, y_text = text_trainer.load_data()
-    X_financial, y_financial = financial_trainer.load_data()
-    
-    # Load test data if provided
-    test_X_text = None
-    test_y_text = None
-    test_X_financial = None
-    test_y_financial = None
-    
-    if text_test_data and financial_test_data:
-        # Load test data for text domain
-        test_df_text = pd.read_csv(text_test_data)
-        exclude_cols_text = exclude_cols.copy() if exclude_cols else ['outperformance_10d', 'setup_id']
-        if label_col not in exclude_cols_text:
-            exclude_cols_text.append(label_col)
-        test_X_text = test_df_text.drop(columns=[col for col in exclude_cols_text if col in test_df_text.columns])
-        test_y_text = test_df_text[label_col].copy()
-        
-        # Load test data for financial domain
-        test_df_financial = pd.read_csv(financial_test_data)
-        exclude_cols_financial = exclude_cols.copy() if exclude_cols else ['outperformance_10d', 'setup_id']
-        if label_col not in exclude_cols_financial:
-            exclude_cols_financial.append(label_col)
-        test_X_financial = test_df_financial.drop(columns=[col for col in exclude_cols_financial if col in test_df_financial.columns])
-        test_y_financial = test_df_financial[label_col].copy()
-        
-        # Apply financial preprocessing to test data if available and not disabled
-        if not disable_saved_preprocessing:
-            try:
-                from financial_preprocessor import FinancialPreprocessor
-                preprocessor = FinancialPreprocessor()
-                
-                # Check if preprocessing parameters are available
-                if preprocessor.has_saved_parameters():
-                    logger.info("Applying saved financial preprocessing parameters to test data")
-                    test_X_financial = preprocessor.apply_preprocessing(test_X_financial)
-            except ImportError:
-                logger.warning("financial_preprocessor module not found, using raw features for test data")
-            except Exception as e:
-                logger.warning(f"Error applying financial preprocessing to test data: {e}")
-    
-    # Train and evaluate models
     results = {}
     
-    # Train text models
-    logger.info("Training text domain models...")
-    text_results = text_trainer.train_models_with_cv(
-        X_text,
-        y_text,
-        test_X_text,
-        test_y_text
-    )
-    results['text'] = text_results
+    # Train text models if text data is provided
+    if text_data:
+        os.makedirs(os.path.join(output_dir, 'text'), exist_ok=True)
+        
+        # Initialize text trainer
+        text_trainer = TextModelTrainer(
+            data_path=text_data,
+            output_dir=output_dir,
+            label_col=label_col,
+            exclude_cols=exclude_cols,
+            models=models,
+            cv_folds=cv_folds,
+            scoring=scoring,
+            random_state=random_state
+        )
+        
+        # Load data
+        X_text, y_text = text_trainer.load_data()
+        
+        # Load test data if provided
+        test_X_text = None
+        test_y_text = None
+        
+        if text_test_data:
+            # Load test data for text domain
+            test_df_text = pd.read_csv(text_test_data)
+            exclude_cols_text = exclude_cols.copy() if exclude_cols else ['outperformance_10d', 'setup_id']
+            if label_col not in exclude_cols_text:
+                exclude_cols_text.append(label_col)
+            test_X_text = test_df_text.drop(columns=[col for col in exclude_cols_text if col in test_df_text.columns])
+            test_y_text = test_df_text[label_col].copy()
+        
+        # Train text models
+        logger.info("Training text domain models...")
+        text_results = text_trainer.train_models_with_cv(
+            X_text,
+            y_text,
+            test_X_text,
+            test_y_text
+        )
+        results['text'] = text_results
     
-    # Train financial models
-    logger.info("Training financial domain models...")
-    financial_results = financial_trainer.train_models_with_cv(
-        X_financial,
-        y_financial,
-        test_X_financial,
-        test_y_financial
-    )
-    results['financial'] = financial_results
+    # Train financial models if financial data is provided
+    if financial_data:
+        os.makedirs(os.path.join(output_dir, 'financial'), exist_ok=True)
+        
+        # Initialize financial trainer
+        financial_trainer = FinancialModelTrainer(
+            data_path=financial_data,
+            output_dir=output_dir,
+            label_col=label_col,
+            exclude_cols=exclude_cols,
+            models=models,
+            cv_folds=cv_folds,
+            scoring=scoring,
+            random_state=random_state,
+            disable_saved_preprocessing=disable_saved_preprocessing
+        )
+        
+        # Load data
+        X_financial, y_financial = financial_trainer.load_data()
+        
+        # Load test data if provided
+        test_X_financial = None
+        test_y_financial = None
+        
+        if financial_test_data:
+            # Load test data for financial domain
+            test_df_financial = pd.read_csv(financial_test_data)
+            exclude_cols_financial = exclude_cols.copy() if exclude_cols else ['outperformance_10d', 'setup_id']
+            if label_col not in exclude_cols_financial:
+                exclude_cols_financial.append(label_col)
+            test_X_financial = test_df_financial.drop(columns=[col for col in exclude_cols_financial if col in test_df_financial.columns])
+            test_y_financial = test_df_financial[label_col].copy()
+            
+            # Apply financial preprocessing to test data if available and not disabled
+            if not disable_saved_preprocessing:
+                try:
+                    from financial_preprocessor import FinancialPreprocessor
+                    preprocessor = FinancialPreprocessor()
+                    
+                    # Check if preprocessing parameters are available
+                    if hasattr(preprocessor, 'has_saved_parameters') and preprocessor.has_saved_parameters():
+                        logger.info("Applying saved financial preprocessing parameters to test data")
+                        test_X_financial = preprocessor.apply_preprocessing(test_X_financial)
+                except ImportError:
+                    logger.warning("financial_preprocessor module not found, using raw features for test data")
+                except Exception as e:
+                    logger.warning(f"Error applying financial preprocessing to test data: {e}")
+        
+        # Train financial models
+        logger.info("Training financial domain models...")
+        financial_results = financial_trainer.train_models_with_cv(
+            X_financial,
+            y_financial,
+            test_X_financial,
+            test_y_financial
+        )
+        results['financial'] = financial_results
     
     return results
 
@@ -520,8 +530,8 @@ def train_and_evaluate(
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Train domain-specific ML models with cross-validation')
-    parser.add_argument('--text-data', required=True, help='Path to text ML features CSV')
-    parser.add_argument('--financial-data', required=True, help='Path to financial ML features CSV')
+    parser.add_argument('--text-data', help='Path to text ML features CSV')
+    parser.add_argument('--financial-data', help='Path to financial ML features CSV')
     parser.add_argument('--text-test-data', help='Path to text ML features test CSV')
     parser.add_argument('--financial-test-data', help='Path to financial ML features test CSV')
     parser.add_argument('--output-dir', default='models', help='Directory to save trained models')
@@ -534,6 +544,10 @@ def main():
     parser.add_argument('--disable-saved-preprocessing', action='store_true', help='Disable loading saved preprocessing parameters for financial domain')
     
     args = parser.parse_args()
+    
+    # Ensure at least one of text_data or financial_data is provided
+    if not args.text_data and not args.financial_data:
+        parser.error("At least one of --text-data or --financial-data must be provided")
     
     # Train and evaluate models
     results = train_and_evaluate(

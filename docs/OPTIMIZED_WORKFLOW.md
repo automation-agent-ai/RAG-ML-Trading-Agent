@@ -321,51 +321,61 @@ python make_agent_predictions.py --setup-list data/prediction_setups.txt
 
 **Note:** This step is placed after label balancing to ensure that agent predictions use the same thresholds as ML models.
 
-### 11. Train ML Models with Cross-Validation
+### 11. Train ML Models with 3-Stage Pipeline
 
-Train various machine learning models using cross-validation:
+Train ML models using the proper 3-stage approach as described in your conversation:
+
+#### The 3-Stage ML Pipeline
+
+**Stage 1: Text-based ML** - Train 4 models (Random Forest, XGBoost, LightGBM, Logistic Regression) on text features extracted by LLM agents.
+
+**Stage 2: Financial-based ML** - Train 4 models on financial features (ratios, fundamentals, growth metrics) from DuckDB.
+
+**Stage 3: Ensemble ML** - Train 4 meta-models on the 8 prediction vectors (3 classes × 8 models = 24 features) from stages 1 & 2.
 
 ```bash
 conda activate sts
-python train_domain_models_cv.py --input data/ml_features/balanced/text_ml_features_training_balanced_*.csv --domain text --output-dir models/text
-python train_domain_models_cv.py --input data/ml_features/balanced/financial_ml_features_training_balanced_*.csv --domain financial --output-dir models/financial
-
-# To disable saved preprocessing parameters (optional)
-python train_domain_models_cv.py --input data/ml_features/balanced/financial_ml_features_training_balanced_*.csv --domain financial --output-dir models/financial --disable-saved-preprocessing
+python train_3stage_ml_pipeline.py --db-path "C:/RAG_trader_pipeline_clean/data/sentiment_system.duckdb" --output-dir models_3stage
 ```
 
-**Options:**
-- `--input`: Path to training data CSV
-- `--domain`: Domain name (text or financial)
-- `--output-dir`: Directory to save trained models
-- `--exclude-cols`: Columns to exclude from features (default: outperformance_10d)
-- `--models`: Models to train (default: random_forest, xgboost, logistic_regression)
-- `--cv-folds`: Number of cross-validation folds (default: 5)
-- `--disable-saved-preprocessing`: Disable loading saved preprocessing parameters for financial domain
-
 **What it does:**
-- Prepares data for training by separating features and labels
-- Excludes `outperformance_10d` from features to prevent target leakage
-- For financial domain: loads and applies saved preprocessing parameters from `financial_preprocessor.py` (unless disabled)
-- Performs stratified k-fold cross-validation
-- Trains multiple ML models (Random Forest, XGBoost, Logistic Regression)
-- Evaluates models on validation and test sets
-- Saves trained models, feature importances, and evaluation results
+- Uses balanced training data from `data/ml_features/balanced/` (641 setup IDs)
+- Stage 1: Trains 4 text models on 41 text features 
+- Stage 2: Trains 4 financial models on 49 financial features
+- Stage 3: Trains 4 ensemble meta-models on 24 prediction vectors (8 models × 3 probability classes)
+- Saves models in separate directories: `text/`, `financial/`, `ensemble/`
+- Applies proper imputation, scaling, and handles -1/0/1 labels → 0/1/2 for sklearn
+- Generates confusion matrices and comprehensive training report
+
+**Key Features:**
+- Consistent setup IDs across text and financial data
+- Proper feature preprocessing with saved transformation parameters
+- Cross-validation for model evaluation
+- Ensemble meta-learning from individual model predictions
 
 ### 12. Make ML Ensemble Predictions
 
-Combine predictions from all ML models to create ensemble predictions:
+Create ensemble predictions using the trained 3-stage ML pipeline:
 
 ```bash
 conda activate sts
-python ensemble_domain_predictions.py --text-input data/ml_features/balanced/text_ml_features_prediction_balanced_*.csv --financial-input data/ml_features/balanced/financial_ml_features_prediction_balanced_*.csv --text-models-dir models/text --financial-models-dir models/financial --output-dir data/predictions
+python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --models-dir models_3stage --output-dir data/predictions
 ```
 
 **What it does:**
-- Loads trained models from each domain
-- Makes predictions on the balanced prediction datasets
-- Combines predictions using weighted voting
-- Outputs ensemble predictions to a CSV file
+- Loads the trained models from all 3 stages (text/, financial/, ensemble/)
+- Makes predictions on prediction data (50 setup IDs) using the same 3-stage process:
+  1. **Stage 1**: Apply 4 text models to text features → get 12 prediction vectors
+  2. **Stage 2**: Apply 4 financial models to financial features → get 12 prediction vectors  
+  3. **Stage 3**: Apply 4 ensemble meta-models to the 24 prediction vectors → get final predictions
+- Outputs final ensemble predictions with confidence scores
+- Provides predictions from individual text and financial models for analysis
+
+**Output Files:**
+- `ensemble_predictions.csv` - Final ensemble predictions
+- `text_predictions.csv` - Individual text model predictions
+- `financial_predictions.csv` - Individual financial model predictions
+- `prediction_report.txt` - Comprehensive prediction summary
 
 ### 13. Generate Results Table
 
@@ -641,128 +651,3 @@ If the ensemble prediction step fails with "No predictions found":
    conda activate sts
    python -c "import duckdb; conn = duckdb.connect('data/sentiment_system.duckdb'); print(conn.execute('SELECT COUNT(*) FROM similarity_predictions').fetchone())"
    ```
-3. If the table is empty, you may need to check the agent code to ensure predictions are being saved correctly
-
-### Column Mismatch Error
-
-If you encounter column mismatch errors during model prediction:
-
-1. Check that the balanced datasets have the same columns in the same order
-2. Verify that the feature extraction process completed successfully
-3. Ensure that the same version of the pipeline was used for both training and prediction
-
-### Missing Import Error
-
-If you see "NameError: name 'os' is not defined" in agent files:
-
-```bash
-conda activate sts
-echo "import os" | cat - agents/analyst_recommendations/enhanced_analyst_recommendations_agent_duckdb.py > temp && mv temp agents/analyst_recommendations/enhanced_analyst_recommendations_agent_duckdb.py
-```
-
-### Other Issues
-
-- **Missing embeddings**: Check that the embedding tables exist and contain data
-- **Feature extraction errors**: Check the logs for specific error messages
-- **Prediction errors**: Verify that the prediction setups have been properly processed
-
-### Feature Mismatch in Financial Preprocessing
-
-If you encounter warnings about feature mismatches during financial preprocessing:
-
-1. Check the logs for specific warnings about missing or extra features
-2. Verify that the training and prediction datasets contain similar financial metrics
-3. The financial preprocessor will attempt to handle mismatches by:
-   - Adding missing features with NaN values
-   - Removing extra features not present during training
-   - Reordering columns to match the training order
-
-If issues persist, you can disable the enhanced preprocessing:
-```bash
-conda activate sts
-python train_domain_models.py --input data/ml_features/balanced/financial_ml_features_training_balanced_*.csv --domain financial --output-dir models/financial --disable-saved-preprocessing
-```
-
-## Performance Considerations
-
-- **Embedding creation** is typically the most computationally intensive step
-- **Feature extraction** time depends on the number of similar cases to process
-- **Financial preprocessing** is optimized but may take longer with comprehensive metrics
-- **Ensemble prediction** is relatively fast even with large datasets
-- The optimized workflow minimizes re-computation by preserving and restoring data
-
-## Financial Preprocessor Module
-
-The pipeline includes a dedicated `financial_preprocessor.py` module that enhances financial data preprocessing:
-
-### Key Features
-
-1. **Comprehensive Financial Metrics**:
-   - Profitability ratios (ROA, ROE, Gross Margin, Net Margin)
-   - Liquidity ratios (Current Ratio, Quick Ratio)
-   - Leverage ratios (Debt to Equity, Interest Coverage)
-   - Asset efficiency ratios (Asset Turnover, Inventory Turnover)
-   - Cash flow metrics (FCF, FCF Yield, Cash Conversion)
-   - Per-share metrics (EPS, BVPS, CFPS)
-   - Valuation ratios (P/E, P/B, P/S, EV/EBITDA)
-
-2. **Multi-Year Growth Metrics**:
-   - 1-year growth rates for key metrics
-   - 2-year growth rates for key metrics
-   - 3-year growth rates for key metrics
-   - Average growth rates (1-3 years)
-   - Trend indicators (acceleration/deceleration)
-
-3. **Consistent Preprocessing**:
-   - Fits imputer and scaler on training data
-   - Saves preprocessing parameters to disk
-   - Loads and applies parameters during prediction
-   - Handles feature alignment between datasets
-
-4. **Data Quality Validation**:
-   - Validates ticker format (adds `.L` suffix for LSE tickers)
-   - Calculates data quality scores based on completeness
-   - Performs basic sanity checks on financial ratios
-   - Reports detailed quality metrics during extraction
-
-### Usage
-
-The financial preprocessor is integrated into the pipeline and used automatically by:
-1. `extract_financial_features_from_duckdb.py` - For feature extraction
-2. `train_domain_models.py` - For consistent preprocessing during training
-
-To use it directly (advanced usage):
-
-```python
-from financial_preprocessor import FinancialPreprocessor
-
-# Initialize preprocessor
-preprocessor = FinancialPreprocessor()
-
-# Extract and preprocess training data
-training_features = preprocessor.extract_and_preprocess(
-    setup_ids=training_setup_ids,
-    mode="training"
-)
-
-# Extract and preprocess prediction data (using saved parameters)
-prediction_features = preprocessor.extract_and_preprocess(
-    setup_ids=prediction_setup_ids,
-    mode="prediction"
-)
-```
-
-## Conclusion
-
-This optimized workflow provides a balance between:
-- Proper separation of training and prediction data
-- Computational efficiency
-- Accurate evaluation of prediction performance
-- Comprehensive ML feature extraction
-- Enhanced financial data preprocessing
-- Machine learning model training and evaluation
-- Consistent label format and column order
-- Balanced class distribution
-- Comprehensive results reporting
-
-By following these steps, you can ensure that your predictions are not influenced by data leakage while still maintaining efficient use of computational resources and applying consistent preprocessing across all datasets.
