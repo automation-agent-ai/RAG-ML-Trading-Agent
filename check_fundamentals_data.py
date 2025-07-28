@@ -19,68 +19,42 @@ def main():
     # Connect to the database
     conn = duckdb.connect('data/sentiment_system.duckdb')
     
-    # Get a sample of setup IDs
-    setup_sample = conn.execute('''
-        SELECT setup_id, lse_ticker, spike_timestamp 
-        FROM setups 
-        WHERE setup_id IN (
-            SELECT setup_id FROM setups LIMIT 10
-        )
-    ''').df()
+    # Check ticker formats in each table
+    print("Setup tickers sample:")
+    setup_tickers = conn.execute('SELECT DISTINCT lse_ticker FROM setups LIMIT 20').df()
+    print(setup_tickers)
     
-    print("Setup sample:")
-    print(setup_sample)
+    print("\nFundamentals tickers sample:")
+    fund_tickers = conn.execute('SELECT DISTINCT ticker FROM fundamentals LIMIT 20').df()
+    print(fund_tickers)
     
-    # Check fundamentals data for these tickers
-    print("\nFundamentals data for these tickers:")
-    for idx, row in setup_sample.iterrows():
-        ticker = row['lse_ticker']
-        setup_id = row['setup_id']
-        spike_timestamp = row['spike_timestamp']
+    print("\nFinancial ratios tickers sample:")
+    ratio_tickers = conn.execute('SELECT DISTINCT ticker FROM financial_ratios LIMIT 20').df()
+    print(ratio_tickers)
+    
+    # Check if there's any overlap between setup tickers and fundamentals tickers
+    setup_ticker_list = setup_tickers['lse_ticker'].tolist()
+    fund_ticker_list = fund_tickers['ticker'].tolist()
+    
+    print("\nChecking for ticker matches:")
+    matches = [ticker for ticker in setup_ticker_list if ticker in fund_ticker_list]
+    print(f"Found {len(matches)} matches between setup tickers and fundamentals tickers")
+    if matches:
+        print("Matches:", matches)
+    
+    # Check if there's a pattern difference (e.g., .L suffix)
+    print("\nChecking for pattern differences:")
+    for setup_ticker in setup_ticker_list[:5]:  # Check first 5
+        print(f"Setup ticker: {setup_ticker}")
+        # Try with .L suffix
+        with_l = f"{setup_ticker}.L"
+        count = conn.execute(f"SELECT COUNT(*) FROM fundamentals WHERE ticker = '{with_l}'").fetchone()[0]
+        print(f"  - With .L suffix ({with_l}): {count} records")
         
-        # Count all fundamentals for this ticker
-        count = conn.execute(f"SELECT COUNT(*) FROM fundamentals WHERE ticker = '{ticker}'").fetchone()[0]
-        print(f"Ticker {ticker} (setup_id {setup_id}): {count} fundamentals records")
-        
-        # Check if there are any fundamentals records before the spike timestamp
-        before_count = conn.execute(f"SELECT COUNT(*) FROM fundamentals WHERE ticker = '{ticker}' AND date <= '{spike_timestamp}'").fetchone()[0]
-        print(f"  - Records before spike timestamp: {before_count}")
-        
-        # If there are records, show a sample
-        if before_count > 0:
-            sample = conn.execute(f"""
-                SELECT date, total_revenue, net_income, total_assets, total_equity
-                FROM fundamentals 
-                WHERE ticker = '{ticker}' AND date <= '{spike_timestamp}'
-                ORDER BY date DESC
-                LIMIT 1
-            """).df()
-            print("  - Latest record:")
-            print(sample)
-    
-    # Check if the JOIN in our query works
-    print("\nTesting JOIN between setups and fundamentals:")
-    join_test = conn.execute('''
-        SELECT s.setup_id, s.lse_ticker, f.date, f.total_revenue
-        FROM setups s
-        JOIN fundamentals f ON s.lse_ticker = f.ticker AND f.date <= s.spike_timestamp
-        LIMIT 10
-    ''').df()
-    print(f"Found {len(join_test)} rows with JOIN")
-    if len(join_test) > 0:
-        print(join_test)
-    
-    # Check financial ratios
-    print("\nTesting JOIN between setups and financial_ratios:")
-    ratios_test = conn.execute('''
-        SELECT s.setup_id, s.lse_ticker, fr.period_end, fr.current_ratio, fr.debt_to_equity
-        FROM setups s
-        JOIN financial_ratios fr ON s.lse_ticker = fr.ticker AND fr.period_end <= s.spike_timestamp
-        LIMIT 10
-    ''').df()
-    print(f"Found {len(ratios_test)} rows with JOIN")
-    if len(ratios_test) > 0:
-        print(ratios_test)
+        # Try without .L suffix
+        without_l = setup_ticker.replace('.L', '')
+        count = conn.execute(f"SELECT COUNT(*) FROM fundamentals WHERE ticker = '{without_l}'").fetchone()[0]
+        print(f"  - Without .L suffix ({without_l}): {count} records")
     
     # Close the connection
     conn.close()

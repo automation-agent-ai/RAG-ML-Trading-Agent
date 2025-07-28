@@ -57,6 +57,7 @@ class FinancialFeaturesExtractor:
             
             # Build comprehensive financial ML features query
             # Based on merge_financial_features.py from old repo
+            # NOTE: Adding .L suffix to setup tickers when joining with fundamentals and financial_ratios
             financial_features_query = """
             WITH 
             -- Get latest fundamentals data for each setup
@@ -88,7 +89,7 @@ class FinancialFeaturesExtractor:
                     ROW_NUMBER() OVER (PARTITION BY s.setup_id ORDER BY f.date DESC) as row_num
                 FROM setups s
                 LEFT JOIN fundamentals f 
-                    ON s.lse_ticker = f.ticker 
+                    ON s.lse_ticker || '.L' = f.ticker  -- Add .L suffix to match fundamentals ticker format
                     AND f.date <= s.spike_timestamp
                 WHERE s.setup_id = ANY(?)
             ),
@@ -134,7 +135,7 @@ class FinancialFeaturesExtractor:
                     ROW_NUMBER() OVER (PARTITION BY s.setup_id ORDER BY fr.period_end DESC) as row_num
                 FROM setups s
                 LEFT JOIN financial_ratios fr 
-                    ON s.lse_ticker = fr.ticker
+                    ON s.lse_ticker || '.L' = fr.ticker  -- Add .L suffix to match financial_ratios ticker format
                     AND fr.period_end <= s.spike_timestamp
                 WHERE s.setup_id = ANY(?)
             ),
@@ -160,7 +161,7 @@ class FinancialFeaturesExtractor:
                     ROW_NUMBER() OVER (PARTITION BY s.setup_id ORDER BY f.date DESC) as row_num
                 FROM setups s
                 LEFT JOIN fundamentals f 
-                    ON s.lse_ticker = f.ticker 
+                    ON s.lse_ticker || '.L' = f.ticker  -- Add .L suffix to match fundamentals ticker format
                     AND f.date <= (s.spike_timestamp - INTERVAL '1 year')
                 WHERE s.setup_id = ANY(?)
             ),
