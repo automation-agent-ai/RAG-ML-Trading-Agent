@@ -442,7 +442,7 @@ class EnhancedUserPostsAgentComplete:
         return "\n".join(context_parts)
     
     def _load_prompt_template(self, context: str) -> str:
-        """Load and format the prompt template for UserPosts feature extraction"""
+        """Load and format the prompt template for UserPosts feature extraction with few-shot learning"""
         
         # Try to load from file first
         prompt_path = Path("features/llm_prompts/llm_prompt_userposts.md")
@@ -451,10 +451,27 @@ class EnhancedUserPostsAgentComplete:
             template = prompt_path.read_text()
             return template.replace("{insert top 2–20 user post excerpts here}", context)
         
-        # Fallback embedded prompt
-        template = """You are analyzing user posts for trading insights. Extract these features as JSON:
+        # Get similar training examples for few-shot learning
+        similar_cases = self.find_similar_training_embeddings(context, limit=3)
+        
+        # Create few-shot examples section
+        examples_section = ""
+        if similar_cases:
+            examples_section = "\n\n**LEARNING FROM SIMILAR CASES:**\n"
+            for i, case in enumerate(similar_cases, 1):
+                outcome = case.get('outperformance_10d', 0.0)
+                text = case.get('text_content', case.get('chunk_text', ''))[:200]
+                examples_section += f"""
+Example {i}:
+User Posts: "{text}..."
+Outcome: Stock {'outperformed' if outcome > 0 else 'underperformed' if outcome < 0 else 'neutral performance'} ({outcome:+.1f}% vs sector in 10 days)
+"""
+            examples_section += "\nNow analyze the current user posts and extract features, learning from these patterns:\n"
+        
+        # Fallback embedded prompt with few-shot learning
+        template = f"""You are analyzing user posts for trading insights. Extract these features as JSON.{examples_section}
 
-POSTS TO ANALYZE:
+**CURRENT POSTS TO ANALYZE:**
 {context}
 
 Extract these features and return as JSON:
@@ -473,21 +490,13 @@ Extract these features and return as JSON:
   "consensus_topics": [list of strings from: "earnings", "dividends", "guidance", "macro", "product", "rumor", "other"],
   "controversial_topics": [list of strings from: "earnings", "dividends", "guidance", "macro", "product", "rumor", "other"],
   "sentiment_distribution": {{"bullish": <int>, "bearish": <int>, "neutral": <int>}},
-  "predicted_outperformance_10d": <float between -15.0 and 15.0>,
   "synthetic_post": "<summary in 240 chars or less>",
   "cot_explanation": "<short reasoning for your analysis>"
 }}
 
-**IMPORTANT:** For predicted_outperformance_10d, consider:
-- High community sentiment + bullish posts → positive outperformance
-- Bearish sentiment + contrarian signals → negative outperformance  
-- High engagement on positive rumors → potential positive outperformance
-- Trusted users' sentiment carries more weight in prediction
-- Recent sentiment shifts indicate momentum direction
-
 Return ONLY the JSON object."""
         
-        return template.replace("{context}", context)
+        return template
     
     def _get_default_llm_features(self) -> Dict[str, Any]:
         """Return default LLM features for empty or failed extractions"""
@@ -765,47 +774,18 @@ Return ONLY the JSON object."""
 
     def find_similar_training_embeddings(self, query: Union[np.ndarray, str], limit: int = 10) -> List[Dict]:
         """
-        Find similar training embeddings with labels
+        Find similar training embeddings with enhanced two-stage retrieval and re-ranking
         
         Args:
             query: Either a numpy array embedding or text content to embed
             limit: Maximum number of similar cases to return
             
         Returns:
-            List of similar cases with their metadata and labels
+            List of re-ranked similar cases with their metadata and labels
         """
         if not hasattr(self, 'training_table') or self.training_table is None:
-            logger.warning("Training embeddings table not available, attempting to connect")
-            # Try to open the table directly
-            try:
-                import lancedb
-                import os
-                
-                # Use absolute path
-                abs_lancedb_dir = os.path.abspath(self.lancedb_dir)
-                logger.info(f"Connecting to LanceDB at absolute path: {abs_lancedb_dir}")
-                db = lancedb.connect(abs_lancedb_dir)
-                
-                # List available tables
-                tables = db.table_names()
-                logger.info(f"Available tables: {tables}")
-                
-                # Try both table names
-                for table_name in ['userposts_embeddings_training', 'userposts_embeddings']:
-                    if table_name in tables:
-                        try:
-                            self.training_table = db.open_table(table_name)
-                            logger.info(f"Successfully opened {table_name} for similarity search")
-                            break
-                        except Exception as e:
-                            logger.warning(f"Could not open {table_name}: {e}")
-                
-                if self.training_table is None:
-                    logger.warning("No suitable training table found")
-                    return []
-            except Exception as e:
-                logger.error(f"Error connecting to LanceDB: {e}")
-                return []
+            logger.warning("Training embeddings table not available")
+            return []
         
         try:
             # Handle text input by creating embedding
@@ -822,18 +802,37 @@ Return ONLY the JSON object."""
             
             logger.info(f"Searching for similar embeddings with limit: {limit}")
             
-            # Search for similar cases
-            results = self.training_table.search(query).limit(limit).to_pandas()
-            logger.info(f"Found {len(results)} similar cases")
+            # Stage 1: Retrieve more candidates for re-ranking (3x the final limit)
+            candidate_limit = min(limit * 3, 30)
+            results = self.training_table.search(query).limit(candidate_limit).to_pandas()
+            
+            if len(results) == 0:
+                return []
+            
+            # Stage 2: Re-rank candidates based on similarity only (EQUAL WEIGHTING)
+            scored_results = []
+            
+            for _, row in results.iterrows():
+                # Use only similarity score - no bias factors
+                similarity = 1 - row.get('_distance', 1.0)
+                score = similarity  # Equal weighting = just use similarity
+                
+                scored_results.append((score, row.to_dict()))
+            
+            # Sort by score and return top results
+            scored_results.sort(key=lambda x: x[0], reverse=True)
+            final_results = [result[1] for result in scored_results[:limit]]
+            
+            logger.info(f"Re-ranked {len(results)} candidates to return top {len(final_results)} similar cases (equal weighting)")
             
             # Check if results contain labels
-            if 'outperformance_10d' in results.columns:
-                avg_outperformance = results['outperformance_10d'].mean()
+            if final_results and 'outperformance_10d' in final_results[0]:
+                avg_outperformance = sum(case.get('outperformance_10d', 0.0) for case in final_results) / len(final_results)
                 logger.info(f"Average outperformance of similar cases: {avg_outperformance}")
             else:
                 logger.warning("Similar cases do not contain outperformance_10d labels")
                 
-            return results.to_dict('records')
+            return final_results
         except Exception as e:
             logger.error(f"Error searching similar embeddings: {e}")
             return []

@@ -739,14 +739,14 @@ class EnhancedNewsAgentDuckDB:
     
     def find_similar_training_embeddings(self, query_embedding: Union[np.ndarray, str], limit: int = 10) -> List[Dict]:
         """
-        Find similar training embeddings with labels
+        Find similar training embeddings with enhanced two-stage retrieval and re-ranking
         
         Args:
             query_embedding: Either a numpy array embedding or text content to embed
             limit: Maximum number of similar cases to return
             
         Returns:
-            List of similar cases with their metadata and labels
+            List of re-ranked similar cases with their metadata and labels
         """
         if not hasattr(self, 'training_table') or self.training_table is None:
             logger.warning("Training embeddings table not available, attempting to connect")
@@ -791,18 +791,38 @@ class EnhancedNewsAgentDuckDB:
             if not isinstance(query_embedding, np.ndarray):
                 query_embedding = np.array(query_embedding)
                 
-            # Search for similar cases
-            results = self.training_table.search(query_embedding).limit(limit).to_pandas()
-            logger.info(f"Found {len(results)} similar cases")
+            # Stage 1: Retrieve more candidates for re-ranking (3x the final limit)
+            candidate_limit = min(limit * 3, 30)
+            results = self.training_table.search(query_embedding).limit(candidate_limit).to_pandas()
+            
+            if len(results) == 0:
+                return []
+            
+            # Stage 2: Re-rank candidates based on similarity only (EQUAL WEIGHTING)
+            scored_results = []
+            
+            for _, row in results.iterrows():
+                # Use only similarity score - no bias factors
+                similarity = 1 - row.get('_distance', 1.0)
+                score = similarity  # Equal weighting = just use similarity
+                
+                scored_results.append((score, row.to_dict()))
+            
+            # Sort by score and return top results
+            scored_results.sort(key=lambda x: x[0], reverse=True)
+            final_results = [result[1] for result in scored_results[:limit]]
+            
+            logger.info(f"Re-ranked {len(results)} candidates to return top {len(final_results)} similar cases (equal weighting)")
             
             # Check if results contain labels
-            if 'outperformance_10d' in results.columns:
-                avg_outperformance = results['outperformance_10d'].mean()
+            if final_results and 'outperformance_10d' in final_results[0]:
+                avg_outperformance = sum(case.get('outperformance_10d', 0.0) for case in final_results) / len(final_results)
                 logger.info(f"Average outperformance of similar cases: {avg_outperformance}")
             else:
                 logger.warning("Similar cases do not contain outperformance_10d labels")
                 
-            return results.to_dict('records')
+            return final_results
+            
         except Exception as e:
             logger.error(f"Error searching similar embeddings: {e}")
             return []
@@ -1003,7 +1023,10 @@ class EnhancedNewsAgentDuckDB:
         return "\n".join(context_parts)
     
     def _load_group_prompt_template(self, group_name: str, context: str) -> str:
-        """Load and format the prompt template for group feature extraction"""
+        """Load and format the prompt template for group feature extraction with few-shot learning"""
+        
+        # Get similar training examples for few-shot learning
+        similar_cases = self.find_similar_training_embeddings(context, limit=3)
         
         # Group-specific feature requirements
         group_features = {
@@ -1012,7 +1035,6 @@ class EnhancedNewsAgentDuckDB:
                 'avg_headline_spin': 'Average headline sentiment (positive/negative/neutral/uncertain)',
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'profit_warning_present': 'Whether any profit warning is present (true/false)',
-                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of financial results news (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             },
@@ -1021,7 +1043,6 @@ class EnhancedNewsAgentDuckDB:
                 'avg_headline_spin': 'Average headline sentiment (positive/negative/neutral/uncertain)',
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'capital_raise_present': 'Whether capital raising activity is present (true/false)',
-                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of corporate actions (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             },
@@ -1030,7 +1051,6 @@ class EnhancedNewsAgentDuckDB:
                 'avg_headline_spin': 'Average headline sentiment (positive/negative/neutral/uncertain)',
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'board_change_present': 'Whether board changes are present (true/false)',
-                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of governance news (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             },
@@ -1040,7 +1060,6 @@ class EnhancedNewsAgentDuckDB:
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'contract_award_present': 'Whether contract awards are present (true/false)',
                 'merger_or_acquisition_present': 'Whether M&A activity is present (true/false)',
-                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of corporate events (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             },
@@ -1050,7 +1069,6 @@ class EnhancedNewsAgentDuckDB:
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'broker_recommendation_present': 'Whether broker recommendations are present (true/false)',
                 'credit_rating_change_present': 'Whether credit rating changes are present (true/false)',
-                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of other market signals (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             }
@@ -1063,8 +1081,6 @@ class EnhancedNewsAgentDuckDB:
         for feature, description in features.items():
             if feature in ['max_severity', 'sentiment_score']:
                 json_template += f'  "{feature}": 0.0,  // {description}\n'
-            elif feature == 'predicted_outperformance_10d':
-                json_template += f'  "{feature}": 0.0,  // {description}\n'
             elif feature == 'avg_headline_spin':
                 json_template += f'  "{feature}": "neutral",  // {description}\n'
             elif 'present' in feature:
@@ -1073,30 +1089,35 @@ class EnhancedNewsAgentDuckDB:
                 json_template += f'  "{feature}": "",  // {description}\n'
         json_template += "}"
         
-        prompt = f"""You are a financial news analyst. Analyze the {group_name.replace('_', ' ')} news items below and extract features as JSON.
+        # Create few-shot examples section
+        examples_section = ""
+        if similar_cases:
+            examples_section = "\n\n**LEARNING FROM SIMILAR CASES:**\n"
+            for i, case in enumerate(similar_cases, 1):
+                outcome = case.get('outperformance_10d', 0.0)
+                text = case.get('text_content', case.get('chunk_text', ''))[:200]
+                examples_section += f"""
+Example {i}:
+News: "{text}..."
+Outcome: Stock {'outperformed' if outcome > 0 else 'underperformed' if outcome < 0 else 'neutral performance'} ({outcome:+.1f}% vs sector in 10 days)
+"""
+            examples_section += "\nNow analyze the current news and extract features, learning from these patterns:\n"
+        
+        prompt = f"""You are a financial news analyst. Analyze the {group_name.replace('_', ' ')} news items and extract features as JSON.{examples_section}
+
+**CURRENT NEWS TO ANALYZE:**
+{context}
+
+**Extract these features as JSON:**
+{json_template}
 
 **Instructions:**
 - Analyze ALL the provided news items for this group
 - Extract features as specified in the JSON template
 - For categorical fields, use ONLY the specified allowed values
 - Synthetic summary must be ≤240 characters
-- **IMPORTANT:** Predict 10-day outperformance (-15.0% to +15.0%) based on news impact
-- Return ONLY valid JSON, no extra text
-
-**JSON Template:**
-{json_template}
-
-**News Items to Analyze:**
-{context}
-
-**Outperformance Prediction Guidance:**
-- Positive earnings surprises, good guidance → positive outperformance
-- Profit warnings, missed expectations → negative outperformance
-- M&A target, contracts → positive outperformance
-- Credit downgrades, board issues → negative outperformance
-
-Extract the features as JSON:"""
-
+- Return ONLY valid JSON, no extra text"""
+        
         return prompt
     
     def _get_default_group_features(self, group_name: str) -> Dict[str, Any]:

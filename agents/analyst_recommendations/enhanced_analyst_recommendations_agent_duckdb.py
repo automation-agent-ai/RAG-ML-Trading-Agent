@@ -289,7 +289,7 @@ class EnhancedAnalystRecommendationsAgentDuckDB:
         }
     
     def create_llm_prompt(self, setup_id: str, recommendations_df: pd.DataFrame) -> str:
-        """Create LLM prompt for analyst recommendations feature extraction"""
+        """Create LLM prompt for analyst recommendations feature extraction with few-shot learning"""
         
         if recommendations_df.empty:
             return f"""
@@ -326,10 +326,28 @@ Period: {period}
         recent_period = recommendations_df.iloc[0]['period'] if len(recommendations_df) > 0 else 'Unknown'
         oldest_period = recommendations_df.iloc[-1]['period'] if len(recommendations_df) > 0 else 'Unknown'
         
+        # Get similar training examples for few-shot learning
+        context_text = f"Analyst recommendations: {recs_summary}"
+        similar_cases = self.find_similar_training_embeddings(context_text, limit=3)
+        
+        # Create few-shot examples section
+        examples_section = ""
+        if similar_cases:
+            examples_section = "\n\n**LEARNING FROM SIMILAR CASES:**\n"
+            for i, case in enumerate(similar_cases, 1):
+                outcome = case.get('outperformance_10d', 0.0)
+                text = case.get('text_content', case.get('chunk_text', ''))[:200]
+                examples_section += f"""
+Example {i}:
+Analyst Data: "{text}..."
+Outcome: Stock {'outperformed' if outcome > 0 else 'underperformed' if outcome < 0 else 'neutral performance'} ({outcome:+.1f}% vs sector in 10 days)
+"""
+            examples_section += "\nNow analyze the current analyst data and extract features, learning from these patterns:\n"
+        
         return f"""
-Analyze analyst recommendations for setup {setup_id}:
+Analyze analyst recommendations for setup {setup_id}:{examples_section}
 
-ANALYST RECOMMENDATIONS DATA:
+**CURRENT ANALYST RECOMMENDATIONS DATA:**
 Total recommendations analyzed: {total_recs}
 Time range: {oldest_period} to {recent_period}
 
@@ -343,21 +361,14 @@ Please extract the following features based on this analyst data:
 3. RECENT_DOWNGRADES (integer): Count of negative rating changes in recent periods  
 4. ANALYST_CONVICTION_SCORE (0.0-1.0): How confident/decisive analysts seem about their recommendations
 5. RECOMMENDATION_MOMENTUM (improving/stable/deteriorating): Trend in analyst sentiment over time
-6. PREDICTED_OUTPERFORMANCE_10D (-15.0 to +15.0): Your prediction of 10-day outperformance percentage based on analyst sentiment
-7. SYNTHETIC_ANALYST_SUMMARY (≤240 chars): Brief summary of analyst sentiment and key themes
-8. COT_EXPLANATION_ANALYST: Your reasoning for the above assessments
+6. SYNTHETIC_ANALYST_SUMMARY (≤240 chars): Brief summary of analyst sentiment and key themes
+7. COT_EXPLANATION_ANALYST: Your reasoning for the above assessments
 
 Focus on:
 - Changes in recommendation patterns over time
 - Strength of analyst conviction vs uncertainty
 - Any emerging themes or consensus shifts
 - How recent the recommendations are
-
-**IMPORTANT:** For PREDICTED_OUTPERFORMANCE_10D, consider:
-- Strong buy consensus with recent upgrades → positive outperformance (+5% to +15%)
-- Hold/sell consensus with downgrades → negative outperformance (-5% to -15%)
-- Mixed or stable ratings → neutral outperformance (-2% to +2%)
-- High conviction scores amplify the prediction magnitude
 
 Return JSON format:
 {{
@@ -366,7 +377,6 @@ Return JSON format:
     "recent_downgrades": 0,
     "analyst_conviction_score": 0.5,
     "recommendation_momentum": "stable",
-    "predicted_outperformance_10d": 0.0,
     "synthetic_analyst_summary": "Brief summary here",
     "cot_explanation_analyst": "Your reasoning here"
 }}
@@ -666,14 +676,14 @@ Return JSON format:
 
     def find_similar_training_embeddings(self, query: Union[np.ndarray, str], limit: int = 10) -> List[Dict]:
         """
-        Find similar training embeddings with labels
+        Find similar training embeddings with enhanced two-stage retrieval and re-ranking
         
         Args:
             query: Either a numpy array embedding or text content to embed
             limit: Maximum number of similar cases to return
             
         Returns:
-            List of similar cases with their metadata and labels
+            List of re-ranked similar cases with their metadata and labels
         """
         if not hasattr(self, 'training_table') or self.training_table is None:
             logger.warning("Training embeddings table not available")
@@ -690,9 +700,31 @@ Return JSON format:
             if not isinstance(query, np.ndarray):
                 query = np.array(query)
                 
-            # Search for similar cases
-            results = self.training_table.search(query).limit(limit).to_pandas()
-            return results.to_dict('records')
+            # Stage 1: Retrieve more candidates for re-ranking (3x the final limit)
+            candidate_limit = min(limit * 3, 30)
+            results = self.training_table.search(query).limit(candidate_limit).to_pandas()
+            
+            if len(results) == 0:
+                return []
+            
+            # Stage 2: Re-rank candidates based on similarity only (EQUAL WEIGHTING)
+            scored_results = []
+            
+            for _, row in results.iterrows():
+                # Use only similarity score - no bias factors
+                similarity = 1 - row.get('_distance', 1.0)
+                score = similarity  # Equal weighting = just use similarity
+                
+                scored_results.append((score, row.to_dict()))
+            
+            # Sort by score and return top results
+            scored_results.sort(key=lambda x: x[0], reverse=True)
+            final_results = [result[1] for result in scored_results[:limit]]
+            
+            logger.info(f"Re-ranked {len(results)} candidates to return top {len(final_results)} similar cases (equal weighting)")
+            
+            return final_results
+            
         except Exception as e:
             logger.error(f"Error searching similar embeddings: {e}")
             return []

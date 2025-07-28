@@ -333,6 +333,60 @@ class EnhancedFundamentalsAgentDuckDB:
         finally:
             conn.close()
     
+    def create_few_shot_prompt(self, setup_id: str, context: str) -> str:
+        """
+        Create a few-shot learning prompt using similar embeddings as examples
+        
+        Args:
+            setup_id: Current setup ID
+            context: Formatted news context for the current setup
+            
+        Returns:
+            Enhanced prompt with similar examples
+        """
+        # Get similar training examples
+        similar_cases = self.find_similar_training_embeddings(context, limit=5)
+        
+        # Base prompt template
+        base_features = """{{
+  "count_financial_results": <number of financial results announcements>,
+  "max_severity_financial_results": <highest severity score 0.0-1.0>,
+  "avg_headline_spin_financial_results": "<positive|negative|neutral|uncertain>",
+  "sentiment_score_financial_results": <overall sentiment -1.0 to 1.0>,
+  "profit_warning_present": <true if any profit warnings>,
+  "synthetic_summary_financial_results": "<summary ≤240 chars>",
+  "cot_explanation_financial_results": "<brief explanation>",
+  "capital_raise_present": <true if capital raising mentioned>,
+  "synthetic_summary_corporate_actions": "<capital actions summary ≤240 chars>"
+}}"""
+        
+        # Create few-shot examples section
+        examples_section = ""
+        if similar_cases:
+            examples_section = "\n\n**LEARNING FROM SIMILAR CASES:**\n"
+            for i, case in enumerate(similar_cases[:3], 1):
+                outcome = case.get('outperformance_10d', 0.0)
+                text = case.get('text_content', case.get('chunk_text', ''))[:200]
+                examples_section += f"""
+Example {i}:
+Text: "{text}..."
+Outcome: Stock {'outperformed' if outcome > 0 else 'underperformed' if outcome < 0 else 'neutral performance'} ({outcome:+.1f}% vs sector in 10 days)
+"""
+            examples_section += "\nNow analyze the current setup and extract features, learning from these patterns:\n"
+        
+        prompt = f"""You are a financial analysis expert. Analyze financial results and earnings-related RNS announcements for trading setup {setup_id}.{examples_section}
+
+**CURRENT SETUP TO ANALYZE:**
+{context}
+
+Extract the following features as JSON:
+
+{base_features}
+
+Focus on financial performance, earnings, profit warnings, and capital structure changes."""
+        
+        return prompt
+
     def extract_llm_features(self, setup_id: str, news_items: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Extract LLM features from financial results RNS news
@@ -343,32 +397,8 @@ class EnhancedFundamentalsAgentDuckDB:
         # Create context for LLM
         context = self._format_news_for_llm(news_items)
         
-        prompt = f"""You are analyzing financial results and earnings-related RNS announcements for trading setup {setup_id}.
-
-**Context:** {context}
-
-Extract the following features as JSON:
-
-{{
-  "count_financial_results": <number of financial results announcements>,
-  "max_severity_financial_results": <highest severity score 0.0-1.0>,
-  "avg_headline_spin_financial_results": "<positive|negative|neutral|uncertain>",
-  "sentiment_score_financial_results": <overall sentiment -1.0 to 1.0>,
-  "profit_warning_present": <true if any profit warnings>,
-  "predicted_outperformance_10d": <float between -15.0 and 15.0>,
-  "synthetic_summary_financial_results": "<summary ≤240 chars>",
-  "cot_explanation_financial_results": "<brief explanation>",
-  "capital_raise_present": <true if capital raising mentioned>,
-  "synthetic_summary_corporate_actions": "<capital actions summary ≤240 chars>"
-}}
-
-Focus on financial performance, earnings, profit warnings, and capital structure changes.
-
-**IMPORTANT:** Based on the financial information provided, predict the 10-day outperformance (predicted_outperformance_10d) as a percentage between -15.0% and +15.0%. Consider:
-- Strong earnings growth → positive outperformance
-- Profit warnings → negative outperformance  
-- Revenue growth and margin improvements → positive outperformance
-- Capital raises and debt issues → negative outperformance"""
+        # Use few-shot learning prompt
+        prompt = self.create_few_shot_prompt(setup_id, context)
         
         try:
             response = self.client.chat.completions.create(
@@ -606,14 +636,14 @@ Focus on financial performance, earnings, profit warnings, and capital structure
 
     def find_similar_training_embeddings(self, query: Union[np.ndarray, str], limit: int = 10) -> List[Dict]:
         """
-        Find similar training embeddings with labels
+        Find similar training embeddings with enhanced two-stage retrieval and re-ranking
         
         Args:
             query: Either a numpy array embedding or text content to embed
             limit: Maximum number of similar cases to return
             
         Returns:
-            List of similar cases with their metadata and labels
+            List of re-ranked similar cases with their metadata and labels
         """
         if not hasattr(self, 'training_table') or self.training_table is None:
             logger.warning("Training embeddings table not available")
@@ -630,9 +660,31 @@ Focus on financial performance, earnings, profit warnings, and capital structure
             if not isinstance(query, np.ndarray):
                 query = np.array(query)
                 
-            # Search for similar cases
-            results = self.training_table.search(query).limit(limit).to_pandas()
-            return results.to_dict('records')
+            # Stage 1: Retrieve more candidates for re-ranking (3x the final limit)
+            candidate_limit = min(limit * 3, 30)
+            results = self.training_table.search(query).limit(candidate_limit).to_pandas()
+            
+            if len(results) == 0:
+                return []
+            
+            # Stage 2: Re-rank candidates based on similarity only (EQUAL WEIGHTING)
+            scored_results = []
+            
+            for _, row in results.iterrows():
+                # Use only similarity score - no bias factors
+                similarity = 1 - row.get('_distance', 1.0)
+                score = similarity  # Equal weighting = just use similarity
+                
+                scored_results.append((score, row.to_dict()))
+            
+            # Sort by score and return top results
+            scored_results.sort(key=lambda x: x[0], reverse=True)
+            final_results = [result[1] for result in scored_results[:limit]]
+            
+            logger.info(f"Re-ranked {len(results)} candidates to return top {len(final_results)} similar cases (equal weighting)")
+            
+            return final_results
+            
         except Exception as e:
             logger.error(f"Error searching similar embeddings: {e}")
             return []
