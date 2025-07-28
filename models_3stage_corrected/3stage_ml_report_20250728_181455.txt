@@ -1,0 +1,140 @@
+3-STAGE ML PIPELINE TRAINING REPORT
+==================================================
+Generated: 2025-07-28 18:14:55
+
+DATASET OVERVIEW
+------------------------------
+Text features: 641 samples, 41 features
+Financial features: 641 samples, 49 features
+
+Class distribution:
+  Negative: 214 samples (33.4%)
+  Neutral: 213 samples (33.2%)
+  Positive: 214 samples (33.4%)
+
+STAGE 1: TEXT-BASED ML RESULTS
+------------------------------
+RANDOM_FOREST:
+  Accuracy: 0.4264
+  Precision (macro): 0.4250
+  Precision by class: Neg=0.435, Neu=0.429, Pos=0.412
+  Recall by class: Neg=0.465, Neu=0.488, Pos=0.326
+  F1 by class: Neg=0.449, Neu=0.457, Pos=0.364
+  CV Score: 0.3750 (±0.0122)
+
+LOGISTIC_REGRESSION:
+  Accuracy: 0.3256
+  Precision (macro): 0.3237
+  Precision by class: Neg=0.310, Neu=0.362, Pos=0.300
+  Recall by class: Neg=0.302, Neu=0.395, Pos=0.279
+  F1 by class: Neg=0.306, Neu=0.378, Pos=0.289
+  CV Score: 0.3614 (±0.0226)
+
+XGBOOST:
+  Accuracy: 0.4109
+  Precision (macro): 0.4112
+  Precision by class: Neg=0.439, Neu=0.404, Pos=0.390
+  Recall by class: Neg=0.419, Neu=0.442, Pos=0.372
+  F1 by class: Neg=0.429, Neu=0.422, Pos=0.381
+  CV Score: 0.3749 (±0.0276)
+
+LIGHTGBM:
+  Accuracy: 0.4031
+  Precision (macro): 0.4018
+  Precision by class: Neg=0.395, Neu=0.426, Pos=0.385
+  Recall by class: Neg=0.395, Neu=0.465, Pos=0.349
+  F1 by class: Neg=0.395, Neu=0.444, Pos=0.366
+  CV Score: 0.3885 (±0.0306)
+
+STAGE 2: FINANCIAL ML RESULTS
+------------------------------
+RANDOM_FOREST:
+  Accuracy: 0.4186
+  Precision (macro): 0.4118
+  Precision by class: Neg=0.404, Neu=0.451, Pos=0.381
+  Recall by class: Neg=0.535, Neu=0.535, Pos=0.186
+  F1 by class: Neg=0.460, Neu=0.489, Pos=0.250
+  CV Score: 0.3457 (±0.0400)
+
+LOGISTIC_REGRESSION:
+  Accuracy: 0.3566
+  Precision (macro): 0.3485
+  Precision by class: Neg=0.365, Neu=0.373, Pos=0.308
+  Recall by class: Neg=0.442, Neu=0.442, Pos=0.186
+  F1 by class: Neg=0.400, Neu=0.404, Pos=0.232
+  CV Score: 0.3848 (±0.0236)
+
+XGBOOST:
+  Accuracy: 0.3876
+  Precision (macro): 0.3759
+  Precision by class: Neg=0.422, Neu=0.415, Pos=0.290
+  Recall by class: Neg=0.442, Neu=0.512, Pos=0.209
+  F1 by class: Neg=0.432, Neu=0.458, Pos=0.243
+  CV Score: 0.3612 (±0.0527)
+
+LIGHTGBM:
+  Accuracy: 0.4341
+  Precision (macro): 0.4274
+  Precision by class: Neg=0.435, Neu=0.455, Pos=0.393
+  Recall by class: Neg=0.465, Neu=0.581, Pos=0.256
+  F1 by class: Neg=0.449, Neu=0.510, Pos=0.310
+  CV Score: 0.3711 (±0.0218)
+
+DOMAIN CORRELATION ANALYSIS
+------------------------------
+Could not generate correlation analysis
+
+STAGE 3: ENSEMBLE ML RESULTS
+------------------------------
+RANDOM_FOREST:
+  Accuracy: 0.4419
+  Precision (macro): 0.4436
+  Precision by class: Neg=0.475, Neu=0.420, Pos=0.436
+  Recall by class: Neg=0.442, Neu=0.488, Pos=0.395
+  F1 by class: Neg=0.458, Neu=0.452, Pos=0.415
+  CV Score: 0.9824 (±0.0114)
+
+LOGISTIC_REGRESSION:
+  Accuracy: 0.4419
+  Precision (macro): 0.4429
+  Precision by class: Neg=0.432, Neu=0.438, Pos=0.459
+  Recall by class: Neg=0.442, Neu=0.488, Pos=0.395
+  F1 by class: Neg=0.437, Neu=0.462, Pos=0.425
+  CV Score: 0.9824 (±0.0114)
+
+XGBOOST:
+  Accuracy: 0.4109
+  Precision (macro): 0.4111
+  Precision by class: Neg=0.429, Neu=0.400, Pos=0.405
+  Recall by class: Neg=0.419, Neu=0.419, Pos=0.395
+  F1 by class: Neg=0.424, Neu=0.409, Pos=0.400
+  CV Score: 0.9883 (±0.0095)
+
+LIGHTGBM:
+  Accuracy: 0.4031
+  Precision (macro): 0.4055
+  Precision by class: Neg=0.462, Neu=0.380, Pos=0.375
+  Recall by class: Neg=0.419, Neu=0.442, Pos=0.349
+  F1 by class: Neg=0.439, Neu=0.409, Pos=0.361
+  CV Score: 0.9883 (±0.0113)
+
+BEST PERFORMING MODELS
+------------------------------
+Best Text Model: random_forest (Accuracy: 0.4264)
+Best Financial Model: lightgbm (Accuracy: 0.4341)
+Best Ensemble Model: random_forest (Accuracy: 0.4419)
+
+PERFORMANCE vs BASELINES
+------------------------------
+Random baseline accuracy: 33.3%
+Best model accuracy: 44.2%
+Improvement over random: 32.6%
+
+TRADING INTERPRETATION
+------------------------------
+- Positive class (BUY signal) precision of 43.6% means:
+  When the model predicts a stock will be in the top 33.3% of performers,
+  it is correct 43.6% of the time.
+- This minimizes false positives (entering bad trades).
+
+==================================================

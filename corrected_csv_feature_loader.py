@@ -9,8 +9,10 @@ Properly handles the existing label column with values -1, 0, 1
 import numpy as np
 import pandas as pd
 import glob
+import os
 from typing import List, Optional, Tuple
 import logging
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +38,11 @@ class CorrectedCSVFeatureLoader:
         pattern = f"{self.data_dir}/text_ml_features_{mode}_balanced_*.csv"
         csv_files = glob.glob(pattern)
         
+        if not csv_files:
+            # Try a more flexible pattern as fallback
+            pattern = f"{self.data_dir}/text_ml_features_{mode}*.csv"
+            csv_files = glob.glob(pattern)
+            
         if not csv_files:
             logger.error(f"No text {mode} CSV files found matching pattern: {pattern}")
             return None, None
@@ -106,6 +113,11 @@ class CorrectedCSVFeatureLoader:
         pattern = f"{self.data_dir}/financial_ml_features_{mode}_balanced_*.csv"
         csv_files = glob.glob(pattern)
         
+        if not csv_files:
+            # Try a more flexible pattern as fallback
+            pattern = f"{self.data_dir}/financial_ml_features_{mode}*.csv"
+            csv_files = glob.glob(pattern)
+            
         if not csv_files:
             logger.error(f"No financial {mode} CSV files found matching pattern: {pattern}")
             return None, None

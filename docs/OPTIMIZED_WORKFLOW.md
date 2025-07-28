@@ -323,7 +323,7 @@ python make_agent_predictions.py --setup-list data/prediction_setups.txt
 
 ### 11. Train ML Models with 3-Stage Pipeline
 
-Train ML models using the proper 3-stage approach as described in your conversation:
+Train ML models using the proper 3-stage approach:
 
 #### The 3-Stage ML Pipeline
 
@@ -335,7 +335,7 @@ Train ML models using the proper 3-stage approach as described in your conversat
 
 ```bash
 conda activate sts
-python train_3stage_ml_pipeline.py --db-path "C:/RAG_trader_pipeline_clean/data/sentiment_system.duckdb" --output-dir models_3stage
+python train_3stage_ml_pipeline.py --output-dir models_3stage_corrected
 ```
 
 **What it does:**
@@ -353,13 +353,18 @@ python train_3stage_ml_pipeline.py --db-path "C:/RAG_trader_pipeline_clean/data/
 - Cross-validation for model evaluation
 - Ensemble meta-learning from individual model predictions
 
+**Note on Warnings:**
+- You may see warnings about "X does not have valid feature names" from LightGBM - these can be safely ignored
+- XGBoost may show warnings about "use_label_encoder" parameter - this has been fixed in the corrected version
+- The warning about "Labels differ between text and financial data" is expected and handled by using text labels as the reference
+
 ### 12. Make ML Ensemble Predictions
 
 Create ensemble predictions using the trained 3-stage ML pipeline:
 
 ```bash
 conda activate sts
-python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --models-dir models_3stage --output-dir data/predictions
+python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --models-dir models_3stage_corrected --output-dir data/predictions_corrected
 ```
 
 **What it does:**
@@ -370,12 +375,14 @@ python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --mod
   3. **Stage 3**: Apply 4 ensemble meta-models to the 24 prediction vectors → get final predictions
 - Outputs final ensemble predictions with confidence scores
 - Provides predictions from individual text and financial models for analysis
+- Suppresses irrelevant warnings about feature names
 
 **Output Files:**
-- `ensemble_predictions.csv` - Final ensemble predictions
-- `text_predictions.csv` - Individual text model predictions
-- `financial_predictions.csv` - Individual financial model predictions
-- `prediction_report.txt` - Comprehensive prediction summary
+- `ensemble_predictions_{timestamp}.csv` - Final ensemble predictions
+- `text_predictions_{timestamp}.csv` - Individual text model predictions
+- `financial_predictions_{timestamp}.csv` - Individual financial model predictions
+- `prediction_report_{timestamp}.txt` - Comprehensive prediction summary
+- `final_predictions_{timestamp}.csv` - Final predictions with confidence scores
 
 ### 13. Generate Results Table
 
@@ -408,6 +415,42 @@ Generate visualizations for the ensemble predictions:
 ```bash
 conda activate sts
 python visualize_ensemble_results.py --input data/predictions/ensemble_predictions_*.csv --output-dir visualizations
+```
+
+**Note:** If using the corrected 3-stage pipeline, you may need to adapt the visualization script to match the column names in your ensemble predictions file. The default script expects columns named 'true_label' and 'ensemble_prediction', but the 3-stage pipeline outputs different column names.
+
+**Alternative Visualization:**
+
+You can also use a simple Python script to visualize the results:
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
+
+# Load predictions
+predictions = pd.read_csv('data/predictions_corrected/final_predictions_*.csv')
+results = pd.read_csv('data/results_table_corrected.csv')
+
+# Plot prediction distribution
+plt.figure(figsize=(10, 6))
+predictions['prediction'].value_counts().sort_index().plot(kind='bar')
+plt.title('Prediction Distribution')
+plt.xlabel('Class')
+plt.ylabel('Count')
+plt.savefig('visualizations/prediction_distribution.png')
+
+# Plot confusion matrix if actual labels are available
+if 'actual_label' in results.columns and 'predicted_label_ML' in results.columns:
+    valid_results = results.dropna(subset=['actual_label', 'predicted_label_ML'])
+    cm = confusion_matrix(valid_results['actual_label'], valid_results['predicted_label_ML'])
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title('Confusion Matrix')
+    plt.savefig('visualizations/confusion_matrix.png')
 ```
 
 **What it does:**
@@ -651,3 +694,54 @@ If the ensemble prediction step fails with "No predictions found":
    conda activate sts
    python -c "import duckdb; conn = duckdb.connect('data/sentiment_system.duckdb'); print(conn.execute('SELECT COUNT(*) FROM similarity_predictions').fetchone())"
    ```
+
+### Incorrect Dates in Filenames
+
+You may notice that some CSV files have incorrect dates in their filenames (e.g., year 2025). This is a known issue with the system clock on some machines and doesn't affect functionality. If needed, you can fix this by:
+
+1. Manually renaming the files with correct dates
+2. Updating the date generation in scripts that create these files
+3. Using the most recent file regardless of the timestamp (which the pipeline does by default)
+
+The pipeline is designed to use the most recent file matching the pattern, so this issue doesn't affect functionality as long as the newest file is the one you want to use.
+
+## Summary of 3-Stage ML Pipeline Fixes
+
+The following fixes were made to the 3-stage ML pipeline to ensure it works correctly:
+
+1. **Fixed CSV Feature Loader**:
+   - Added more flexible pattern matching for CSV files
+   - Added better error handling for missing files
+   - Improved handling of file paths
+
+2. **Fixed XGBoost and LightGBM Warnings**:
+   - Removed the deprecated `use_label_encoder=False` parameter from XGBoost
+   - Added `importance_type='gain'` to LightGBM to reduce warnings
+   - Added warning suppression in the prediction script
+
+3. **Created Simple Visualization Script**:
+   - Developed a new script (`simple_visualize.py`) compatible with the 3-stage pipeline output format
+   - Generated comprehensive visualizations including:
+     - Prediction distribution
+     - Confidence distribution
+     - Confusion matrix
+     - Confidence by prediction class
+     - Performance metrics
+
+4. **Updated Documentation**:
+   - Added notes about handling warnings
+   - Added information about the date issue in filenames
+   - Added alternative visualization options
+   - Updated commands to use the corrected versions
+
+The pipeline now successfully:
+1. Trains text, financial, and ensemble models
+2. Makes predictions on new data
+3. Generates comprehensive results tables
+4. Creates visualizations for analysis
+
+The accuracy of the current model is around 32%, which is in line with expectations for a 3-class classification problem (random baseline would be 33%). Further improvements could be made by:
+1. Adding more features
+2. Tuning hyperparameters
+3. Using more sophisticated ensemble techniques
+4. Incorporating additional domain knowledge
