@@ -1,537 +1,558 @@
 #!/usr/bin/env python3
 """
-Train Domain-Specific ML Models with Cross-Validation
+Train Domain Models with Cross-Validation
 
-This script trains separate machine learning models for text and financial features
-using cross-validation to get more robust performance estimates.
-
-Usage:
-    python train_domain_models_cv.py --text-data data/ml_features/text_ml_features_training_labeled.csv 
-                                   --financial-data data/ml_features/financial_ml_features_training_labeled.csv 
-                                   --output-dir models
-                                   --cv 5
-                                   --scoring precision_weighted
+This script trains domain-specific ML models with cross-validation
+and evaluates their performance.
 """
 
 import os
 import sys
-import argparse
 import logging
-import pandas as pd
+import argparse
 import numpy as np
-import pickle
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 from pathlib import Path
-from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
 
 # ML libraries
+from sklearn.model_selection import cross_validate, StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report
-from sklearn.model_selection import cross_validate, StratifiedKFold
-
-# Try to import XGBoost, use GradientBoosting as fallback
-try:
-    from xgboost import XGBClassifier
-    has_xgboost = True
-except ImportError:
-    from sklearn.ensemble import GradientBoostingClassifier
-    has_xgboost = False
-    print("XGBoost not found, using GradientBoostingClassifier as fallback")
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+import xgboost as xgb
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
-class DomainMLTrainerCV:
-    """Class for training domain-specific ML models with cross-validation"""
+class DomainModelTrainer:
+    """Base class for domain-specific model trainers"""
     
     def __init__(
         self,
-        domain: str,
-        output_dir: str = "models",
-        cv: int = 5,
-        scoring: str = "precision_weighted",
+        data_path: str,
+        output_dir: str,
+        label_col: str = 'label',
+        exclude_cols: List[str] = None,
+        models: List[str] = None,
+        cv_folds: int = 5,
+        scoring: str = 'f1_weighted',
         random_state: int = 42
     ):
-        """
-        Initialize the trainer
+        """Initialize the trainer
         
         Args:
-            domain: Domain name ('text' or 'financial')
-            output_dir: Directory to save models
-            cv: Number of cross-validation folds
+            data_path: Path to the data CSV
+            output_dir: Directory to save trained models
+            label_col: Name of the label column
+            exclude_cols: Columns to exclude from features
+            models: Models to train
+            cv_folds: Number of cross-validation folds
             scoring: Scoring metric for cross-validation
             random_state: Random state for reproducibility
         """
-        self.domain = domain
-        self.output_dir = Path(output_dir) / domain
-        self.output_dir.mkdir(exist_ok=True, parents=True)
-        self.cv = cv
+        self.data_path = data_path
+        self.output_dir = output_dir
+        self.label_col = label_col
+        self.exclude_cols = exclude_cols or ['outperformance_10d', 'setup_id']
+        self.models = models or ['random_forest', 'xgboost', 'logistic_regression']
+        self.cv_folds = cv_folds
         self.scoring = scoring
         self.random_state = random_state
-        self.models = {}
-        self.cv_results = {}
-        self.feature_importances = {}
-        self.evaluation_results = {}
-        self.feature_columns = []
-    
-    def prepare_data(
-        self,
-        data: pd.DataFrame,
-        label_col: str = "label",
-        exclude_cols: List[str] = None
-    ) -> Tuple[pd.DataFrame, pd.Series]:
-        """
-        Prepare data for training by separating features and labels
+        self.domain_name = 'base'
         
-        Args:
-            data: DataFrame with features and labels
-            label_col: Name of the label column
-            exclude_cols: Columns to exclude from features
-            
+        # Create output directory
+        os.makedirs(output_dir, exist_ok=True)
+        
+    def load_data(self) -> Tuple[pd.DataFrame, pd.Series]:
+        """Load data from CSV
+        
         Returns:
-            Tuple of (X, y) where X is features and y is labels
+            Tuple of (features, labels)
         """
-        if exclude_cols is None:
-            exclude_cols = []
+        # Load data
+        df = pd.read_csv(self.data_path)
         
-        # Drop rows with NaN labels
-        data = data.dropna(subset=[label_col])
-        
-        if len(data) == 0:
-            raise ValueError(f"No valid data with non-NaN '{label_col}' values")
-        
-        # Get labels
-        y = data[label_col]
-        
-        # Get features
-        exclude_cols = exclude_cols + [label_col, "setup_id"]
-        X = data.drop(columns=exclude_cols, errors='ignore')
-        
-        # Store feature columns for later use
-        self.feature_columns = X.columns.tolist()
-        
-        logger.info(f"Prepared {self.domain} data with {X.shape[1]} features and {len(y)} samples")
-        logger.info(f"Label distribution: {y.value_counts().to_dict()}")
+        # Separate features and labels
+        exclude_cols = self.exclude_cols.copy()
+        if self.label_col not in exclude_cols:
+            exclude_cols.append(self.label_col)
+            
+        X = df.drop(columns=[col for col in exclude_cols if col in df.columns])
+        y = df[self.label_col].copy()
         
         return X, y
-    
+        
     def train_models_with_cv(
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        models_to_train: List[str] = None
+        test_X: Optional[pd.DataFrame] = None,
+        test_y: Optional[pd.Series] = None
     ) -> Dict[str, Any]:
-        """
-        Train multiple ML models with cross-validation
+        """Train models with cross-validation
         
         Args:
-            X: Feature DataFrame
-            y: Label Series
-            models_to_train: List of model names to train
+            X: Features
+            y: Labels
+            test_X: Test features (optional)
+            test_y: Test labels (optional)
             
         Returns:
-            Dictionary of trained models
+            Dictionary of trained models and evaluation results
         """
-        if models_to_train is None:
-            models_to_train = ["random_forest", "xgboost", "logistic_regression"]
+        logger.info(f"Prepared {self.domain_name} data with {X.shape[1]} features and {X.shape[0]} samples")
+        logger.info(f"Label distribution: {dict(y.value_counts().sort_index())}")
         
-        # Define cross-validation strategy
-        cv_strategy = StratifiedKFold(n_splits=self.cv, shuffle=True, random_state=self.random_state)
+        results = {}
         
-        # Define scoring metrics
-        scoring = ['accuracy', 'precision_weighted', 'recall_weighted', 'f1_weighted']
-        
-        # Train models
-        for model_name in models_to_train:
-            logger.info(f"Training {self.domain} {model_name} with {self.cv}-fold cross-validation...")
+        for model_name in self.models:
+            logger.info(f"Training {self.domain_name} {model_name} with {self.cv_folds}-fold cross-validation...")
             
-            if model_name == "random_forest":
-                model = Pipeline([
-                    ('imputer', SimpleImputer(strategy='median')),
-                    ('scaler', StandardScaler()),
-                    ('classifier', RandomForestClassifier(
-                        n_estimators=100,
-                        max_depth=10,
-                        random_state=self.random_state
-                    ))
-                ])
-            elif model_name == "xgboost":
-                if has_xgboost:
-                    model = Pipeline([
-                        ('imputer', SimpleImputer(strategy='median')),
-                        ('scaler', StandardScaler()),
-                        ('classifier', XGBClassifier(
-                            n_estimators=100,
-                            max_depth=5,
-                            random_state=self.random_state
-                        ))
-                    ])
-                else:
-                    model = Pipeline([
-                        ('imputer', SimpleImputer(strategy='median')),
-                        ('scaler', StandardScaler()),
-                        ('classifier', GradientBoostingClassifier(
-                            n_estimators=100,
-                            max_depth=5,
-                            random_state=self.random_state
-                        ))
-                    ])
-            elif model_name == "logistic_regression":
-                model = Pipeline([
-                    ('imputer', SimpleImputer(strategy='median')),
-                    ('scaler', StandardScaler()),
-                    ('classifier', LogisticRegression(
-                        max_iter=1000,
-                        random_state=self.random_state
-                    ))
-                ])
+            # Create model pipeline
+            model = self._create_model(model_name)
+            
+            # For XGBoost, we need to handle the -1, 0, 1 labels
+            if model_name == 'xgboost':
+                # Convert labels from [-1, 0, 1] to [0, 1, 2]
+                label_encoder = LabelEncoder()
+                y_encoded = label_encoder.fit_transform(y)
+                
+                # Perform cross-validation
+                cv = StratifiedKFold(n_splits=self.cv_folds, shuffle=True, random_state=self.random_state)
+                cv_results = cross_validate(
+                    model,
+                    X,
+                    y_encoded,  # Use encoded labels for XGBoost
+                    cv=cv,
+                    scoring=['accuracy', 'precision_weighted', 'recall_weighted', 'f1_weighted'],
+                    return_estimator=True
+                )
             else:
-                logger.warning(f"Unknown model: {model_name}")
-                continue
-            
-            # Perform cross-validation
-            cv_results = cross_validate(
-                model, X, y, 
-                cv=cv_strategy,
-                scoring=scoring,
-                return_estimator=True,
-                n_jobs=-1
-            )
-            
-            # Store CV results
-            self.cv_results[model_name] = cv_results
-            
-            # Get best model based on precision_weighted
-            best_idx = np.argmax(cv_results['test_precision_weighted'])
-            best_model = cv_results['estimator'][best_idx]
-            
-            # Save the best model
-            self.models[model_name] = best_model
+                # Perform cross-validation
+                cv = StratifiedKFold(n_splits=self.cv_folds, shuffle=True, random_state=self.random_state)
+                cv_results = cross_validate(
+                    model,
+                    X,
+                    y,
+                    cv=cv,
+                    scoring=['accuracy', 'precision_weighted', 'recall_weighted', 'f1_weighted'],
+                    return_estimator=True
+                )
             
             # Log CV results
-            logger.info(f"  - Mean Accuracy: {np.mean(cv_results['test_accuracy']):.4f} (±{np.std(cv_results['test_accuracy']):.4f})")
-            logger.info(f"  - Mean Precision: {np.mean(cv_results['test_precision_weighted']):.4f} (±{np.std(cv_results['test_precision_weighted']):.4f})")
-            logger.info(f"  - Mean Recall: {np.mean(cv_results['test_recall_weighted']):.4f} (±{np.std(cv_results['test_recall_weighted']):.4f})")
-            logger.info(f"  - Mean F1 Score: {np.mean(cv_results['test_f1_weighted']):.4f} (±{np.std(cv_results['test_f1_weighted']):.4f})")
+            logger.info(f"  - Mean Accuracy: {cv_results['test_accuracy'].mean():.4f} (±{cv_results['test_accuracy'].std():.4f})")
+            logger.info(f"  - Mean Precision: {cv_results['test_precision_weighted'].mean():.4f} (±{cv_results['test_precision_weighted'].std():.4f})")
+            logger.info(f"  - Mean Recall: {cv_results['test_recall_weighted'].mean():.4f} (±{cv_results['test_recall_weighted'].std():.4f})")
+            logger.info(f"  - Mean F1 Score: {cv_results['test_f1_weighted'].mean():.4f} (±{cv_results['test_f1_weighted'].std():.4f})")
             
-            # Extract feature importances from best model if available
-            if hasattr(best_model[-1], 'feature_importances_'):
-                feature_importances = best_model[-1].feature_importances_
-                feature_importance_df = pd.DataFrame({
-                    'feature': self.feature_columns,
-                    'importance': feature_importances
-                }).sort_values('importance', ascending=False)
-                
-                self.feature_importances[model_name] = feature_importance_df
-                
-                # Plot feature importances
-                self._plot_feature_importances(model_name, feature_importance_df)
-        
-        return self.models
-    
-    def _plot_feature_importances(self, model_name: str, importance_df: pd.DataFrame):
-        """Plot feature importances"""
-        # Get top 20 features
-        top_features = importance_df.head(20)
-        
-        plt.figure(figsize=(10, 8))
-        sns.barplot(x='importance', y='feature', data=top_features)
-        plt.title(f'Top 20 Feature Importances - {self.domain} {model_name}')
-        plt.tight_layout()
-        
-        # Save plot
-        plot_path = self.output_dir / f"{model_name}_feature_importances.png"
-        plt.savefig(plot_path)
-        plt.close()
-        
-        logger.info(f"Saved feature importance plot to {plot_path}")
-    
-    def save_models(self) -> Dict[str, str]:
-        """
-        Save trained models to disk
-        
-        Returns:
-            Dictionary of model paths
-        """
-        model_paths = {}
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        for model_name, model in self.models.items():
-            # Create model directory
-            model_dir = self.output_dir / model_name
-            model_dir.mkdir(exist_ok=True, parents=True)
+            # Get best model (by F1 score)
+            best_idx = np.argmax(cv_results['test_f1_weighted'])
+            best_model = cv_results['estimator'][best_idx]
             
             # Save model
-            model_path = model_dir / f"{model_name}_cv_{timestamp}.pkl"
-            with open(model_path, 'wb') as f:
-                pickle.dump(model, f)
+            model_path = os.path.join(self.output_dir, f"{model_name}.pkl")
+            pd.to_pickle(best_model, model_path)
             
-            model_paths[model_name] = str(model_path)
+            # Save feature importance plot if available
+            if hasattr(best_model, 'feature_importances_') or (hasattr(best_model, 'named_steps') and hasattr(best_model.named_steps.get('classifier', None), 'feature_importances_')):
+                self._plot_feature_importance(best_model, X.columns, model_name)
             
-            logger.info(f"Saved {self.domain} {model_name} to {model_path}")
-            
-            # Save feature importances if available
-            if model_name in self.feature_importances:
-                feature_importance_path = model_dir / f"{model_name}_feature_importances_{timestamp}.csv"
-                self.feature_importances[model_name].to_csv(feature_importance_path, index=False)
-                logger.info(f"Saved {self.domain} {model_name} feature importances to {feature_importance_path}")
-            
-            # Save CV results
-            if model_name in self.cv_results:
-                cv_results_path = model_dir / f"{model_name}_cv_results_{timestamp}.txt"
-                with open(cv_results_path, 'w') as f:
-                    f.write(f"Domain: {self.domain}\n")
-                    f.write(f"Model: {model_name}\n\n")
-                    f.write(f"Cross-Validation Results ({self.cv} folds):\n")
-                    f.write(f"  - Mean Accuracy: {np.mean(self.cv_results[model_name]['test_accuracy']):.4f} (±{np.std(self.cv_results[model_name]['test_accuracy']):.4f})\n")
-                    f.write(f"  - Mean Precision: {np.mean(self.cv_results[model_name]['test_precision_weighted']):.4f} (±{np.std(self.cv_results[model_name]['test_precision_weighted']):.4f})\n")
-                    f.write(f"  - Mean Recall: {np.mean(self.cv_results[model_name]['test_recall_weighted']):.4f} (±{np.std(self.cv_results[model_name]['test_recall_weighted']):.4f})\n")
-                    f.write(f"  - Mean F1 Score: {np.mean(self.cv_results[model_name]['test_f1_weighted']):.4f} (±{np.std(self.cv_results[model_name]['test_f1_weighted']):.4f})\n")
+            # Evaluate on test set if provided
+            if test_X is not None and test_y is not None:
+                if model_name == 'xgboost':
+                    # Convert test labels from [-1, 0, 1] to [0, 1, 2]
+                    test_y_encoded = label_encoder.transform(test_y)
+                    
+                    # Make predictions
+                    test_pred = best_model.predict(test_X)
+                    
+                    # Convert predictions back to original labels
+                    test_pred = label_encoder.inverse_transform(test_pred)
+                    
+                    # Evaluate
+                    test_accuracy = accuracy_score(test_y, test_pred)
+                    test_precision = precision_score(test_y, test_pred, average='weighted')
+                    test_recall = recall_score(test_y, test_pred, average='weighted')
+                    test_f1 = f1_score(test_y, test_pred, average='weighted')
+                else:
+                    # Make predictions
+                    test_pred = best_model.predict(test_X)
+                    
+                    # Evaluate
+                    test_accuracy = accuracy_score(test_y, test_pred)
+                    test_precision = precision_score(test_y, test_pred, average='weighted')
+                    test_recall = recall_score(test_y, test_pred, average='weighted')
+                    test_f1 = f1_score(test_y, test_pred, average='weighted')
                 
-                logger.info(f"Saved {self.domain} {model_name} CV results to {cv_results_path}")
-        
-        # Save model weights based on precision for ensemble
-        weights_path = self.output_dir / f"model_weights_{timestamp}.csv"
-        weights_df = pd.DataFrame({
-            'model': list(self.cv_results.keys()),
-            'precision': [np.mean(self.cv_results[model]['test_precision_weighted']) for model in self.cv_results],
-            'weight': [np.mean(self.cv_results[model]['test_precision_weighted']) for model in self.cv_results]
-        })
-        weights_df.to_csv(weights_path, index=False)
-        logger.info(f"Saved model weights to {weights_path}")
-        
-        return model_paths
-    
-    def evaluate_on_test_data(
-        self,
-        X_test: pd.DataFrame,
-        y_test: pd.Series,
-        output_predictions: bool = True
-    ) -> Dict[str, Dict[str, float]]:
-        """
-        Evaluate trained models on test data
-        
-        Args:
-            X_test: Test features
-            y_test: Test labels
-            output_predictions: Whether to output predictions to CSV
+                logger.info(f"  - Test Accuracy: {test_accuracy:.4f}")
+                logger.info(f"  - Test Precision: {test_precision:.4f}")
+                logger.info(f"  - Test Recall: {test_recall:.4f}")
+                logger.info(f"  - Test F1 Score: {test_f1:.4f}")
+                
+                # Save confusion matrix
+                cm = confusion_matrix(test_y, test_pred)
+                self._plot_confusion_matrix(cm, model_name)
             
-        Returns:
-            Dictionary of evaluation results
-        """
-        test_results = {}
-        
-        for model_name, model in self.models.items():
-            logger.info(f"Evaluating {self.domain} {model_name} on test data...")
-            
-            # Make predictions
-            y_pred = model.predict(X_test)
-            
-            # Calculate metrics
-            accuracy = accuracy_score(y_test, y_pred)
-            precision = precision_score(y_test, y_pred, average='weighted')
-            recall = recall_score(y_test, y_pred, average='weighted')
-            f1 = f1_score(y_test, y_pred, average='weighted')
-            cm = confusion_matrix(y_test, y_pred)
-            report = classification_report(y_test, y_pred)
-            
-            # Save test results
-            test_results[model_name] = {
-                "accuracy": accuracy,
-                "precision": precision,
-                "recall": recall,
-                "f1": f1,
-                "confusion_matrix": cm,
-                "classification_report": report,
-                "predictions": y_pred
+            # Store results
+            results[model_name] = {
+                'model': best_model,
+                'cv_results': cv_results,
+                'feature_names': X.columns.tolist()
             }
             
-            # Plot confusion matrix for test data
-            self._plot_confusion_matrix(model_name, cm, y_test.unique())
-            
-            logger.info(f"  - Test Accuracy: {accuracy:.4f}")
-            logger.info(f"  - Test Precision: {precision:.4f}")
-            logger.info(f"  - Test Recall: {recall:.4f}")
-            logger.info(f"  - Test F1 Score: {f1:.4f}")
-            
-            # Output predictions to CSV if requested
-            if output_predictions:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                predictions_path = self.output_dir / f"{model_name}_predictions_{timestamp}.csv"
-                
-                # Create DataFrame with predictions
-                predictions_df = pd.DataFrame({
-                    'true_label': y_test,
-                    'predicted_label': y_pred
-                })
-                
-                # Save to CSV
-                predictions_df.to_csv(predictions_path, index=False)
-                logger.info(f"Saved {self.domain} {model_name} predictions to {predictions_path}")
+            if test_X is not None and test_y is not None:
+                results[model_name]['test_accuracy'] = test_accuracy
+                results[model_name]['test_precision'] = test_precision
+                results[model_name]['test_recall'] = test_recall
+                results[model_name]['test_f1'] = test_f1
+                results[model_name]['test_predictions'] = test_pred
         
-        return test_results
+        return results
     
-    def _plot_confusion_matrix(self, model_name: str, cm: np.ndarray, classes: np.ndarray):
-        """Plot confusion matrix"""
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=classes, yticklabels=classes)
-        plt.title(f'Confusion Matrix - {self.domain} {model_name}')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
+    def _create_model(self, model_name: str) -> Any:
+        """Create a model pipeline
+        
+        Args:
+            model_name: Name of the model to create
+            
+        Returns:
+            Model pipeline
+        """
+        if model_name == 'random_forest':
+            return Pipeline([
+                ('imputer', SimpleImputer(strategy='median')),
+                ('scaler', StandardScaler()),
+                ('classifier', RandomForestClassifier(
+                    n_estimators=100,
+                    max_depth=None,
+                    min_samples_split=2,
+                    min_samples_leaf=1,
+                    random_state=self.random_state
+                ))
+            ])
+        elif model_name == 'xgboost':
+            return Pipeline([
+                ('imputer', SimpleImputer(strategy='median')),
+                ('scaler', StandardScaler()),
+                ('classifier', xgb.XGBClassifier(
+                    n_estimators=100,
+                    max_depth=3,
+                    learning_rate=0.1,
+                    random_state=self.random_state,
+                    use_label_encoder=False,
+                    eval_metric='mlogloss'
+                ))
+            ])
+        elif model_name == 'logistic_regression':
+            return Pipeline([
+                ('imputer', SimpleImputer(strategy='median')),
+                ('scaler', StandardScaler()),
+                ('classifier', LogisticRegression(
+                    C=1.0,
+                    penalty='l2',
+                    solver='liblinear',
+                    multi_class='ovr',
+                    random_state=self.random_state
+                ))
+            ])
+        else:
+            raise ValueError(f"Unknown model: {model_name}")
+    
+    def _plot_feature_importance(self, model: Any, feature_names: List[str], model_name: str) -> None:
+        """Plot feature importance
+        
+        Args:
+            model: Trained model
+            feature_names: Feature names
+            model_name: Name of the model
+        """
+        # Get feature importances
+        if hasattr(model, 'feature_importances_'):
+            importances = model.feature_importances_
+        elif hasattr(model, 'named_steps') and hasattr(model.named_steps.get('classifier', None), 'feature_importances_'):
+            importances = model.named_steps['classifier'].feature_importances_
+        else:
+            return
+        
+        # Sort feature importances
+        indices = np.argsort(importances)[::-1]
+        
+        # Plot
+        plt.figure(figsize=(10, 6))
+        plt.title(f'Feature Importances - {model_name.capitalize()}')
+        plt.bar(range(len(indices)), importances[indices], align='center')
+        plt.xticks(range(len(indices)), [feature_names[i] for i in indices], rotation=90)
         plt.tight_layout()
         
         # Save plot
-        plot_path = self.output_dir / f"{model_name}_confusion_matrix.png"
-        plt.savefig(plot_path)
-        plt.close()
+        os.makedirs(os.path.join(self.output_dir, self.domain_name), exist_ok=True)
+        plt.savefig(os.path.join(self.output_dir, self.domain_name, f'{model_name}_feature_importances.png'))
+        logger.info(f"Saved feature importance plot to {os.path.join(self.output_dir, self.domain_name, f'{model_name}_feature_importances.png')}")
+    
+    def _plot_confusion_matrix(self, cm: np.ndarray, model_name: str) -> None:
+        """Plot confusion matrix
         
-        logger.info(f"Saved confusion matrix plot to {plot_path}")
+        Args:
+            cm: Confusion matrix
+            model_name: Name of the model
+        """
+        plt.figure(figsize=(8, 6))
+        plt.title(f'Confusion Matrix - {model_name.capitalize()}')
+        plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+        plt.colorbar()
+        
+        classes = np.unique([-1, 0, 1])
+        tick_marks = np.arange(len(classes))
+        plt.xticks(tick_marks, classes)
+        plt.yticks(tick_marks, classes)
+        
+        # Add text annotations
+        thresh = cm.max() / 2.0
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                plt.text(j, i, format(cm[i, j], 'd'),
+                        horizontalalignment="center",
+                        color="white" if cm[i, j] > thresh else "black")
+        
+        plt.ylabel('True label')
+        plt.xlabel('Predicted label')
+        plt.tight_layout()
+        
+        # Save plot
+        os.makedirs(os.path.join(self.output_dir, self.domain_name), exist_ok=True)
+        plt.savefig(os.path.join(self.output_dir, self.domain_name, f'{model_name}_confusion_matrix.png'))
+        logger.info(f"Saved confusion matrix plot to {os.path.join(self.output_dir, self.domain_name, f'{model_name}_confusion_matrix.png')}")
+
+
+class TextModelTrainer(DomainModelTrainer):
+    """Trainer for text domain models"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.domain_name = 'text'
+
+
+class FinancialModelTrainer(DomainModelTrainer):
+    """Trainer for financial domain models"""
+    
+    def __init__(self, *args, disable_saved_preprocessing: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.domain_name = 'financial'
+        self.disable_saved_preprocessing = disable_saved_preprocessing
+        
+    def load_data(self) -> Tuple[pd.DataFrame, pd.Series]:
+        """Load data from CSV with financial preprocessing
+        
+        Returns:
+            Tuple of (features, labels)
+        """
+        # Load data
+        df = pd.read_csv(self.data_path)
+        
+        # Separate features and labels
+        exclude_cols = self.exclude_cols.copy()
+        if self.label_col not in exclude_cols:
+            exclude_cols.append(self.label_col)
+            
+        X = df.drop(columns=[col for col in exclude_cols if col in df.columns])
+        y = df[self.label_col].copy()
+        
+        # Apply saved preprocessing if available and not disabled
+        if not self.disable_saved_preprocessing:
+            try:
+                from financial_preprocessor import FinancialPreprocessor
+                preprocessor = FinancialPreprocessor()
+                
+                # Check if preprocessing parameters are available
+                if preprocessor.has_saved_parameters():
+                    logger.info("Applying saved financial preprocessing parameters")
+                    X = preprocessor.apply_preprocessing(X)
+                else:
+                    logger.warning("No saved preprocessing parameters found, using raw features")
+            except ImportError:
+                logger.warning("financial_preprocessor module not found, using raw features")
+            except Exception as e:
+                logger.warning(f"Error applying financial preprocessing: {e}")
+        
+        return X, y
+
+
+def train_and_evaluate(
+    text_data: str,
+    financial_data: str,
+    text_test_data: Optional[str] = None,
+    financial_test_data: Optional[str] = None,
+    output_dir: str = 'models',
+    label_col: str = 'label',
+    exclude_cols: List[str] = None,
+    models: List[str] = None,
+    cv_folds: int = 5,
+    scoring: str = 'f1_weighted',
+    random_state: int = 42,
+    disable_saved_preprocessing: bool = False
+) -> Dict[str, Any]:
+    """Train and evaluate domain models
+    
+    Args:
+        text_data: Path to text ML features CSV
+        financial_data: Path to financial ML features CSV
+        text_test_data: Path to text ML features test CSV (optional)
+        financial_test_data: Path to financial ML features test CSV (optional)
+        output_dir: Directory to save trained models
+        label_col: Name of the label column
+        exclude_cols: Columns to exclude from features
+        models: Models to train
+        cv_folds: Number of cross-validation folds
+        scoring: Scoring metric for cross-validation
+        random_state: Random state for reproducibility
+        disable_saved_preprocessing: Disable loading saved preprocessing parameters for financial domain
+        
+    Returns:
+        Dictionary of trained models and evaluation results
+    """
+    # Create output directories
+    os.makedirs(os.path.join(output_dir, 'text'), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, 'financial'), exist_ok=True)
+    
+    # Initialize trainers
+    text_trainer = TextModelTrainer(
+        data_path=text_data,
+        output_dir=output_dir,
+        label_col=label_col,
+        exclude_cols=exclude_cols,
+        models=models,
+        cv_folds=cv_folds,
+        scoring=scoring,
+        random_state=random_state
+    )
+    
+    financial_trainer = FinancialModelTrainer(
+        data_path=financial_data,
+        output_dir=output_dir,
+        label_col=label_col,
+        exclude_cols=exclude_cols,
+        models=models,
+        cv_folds=cv_folds,
+        scoring=scoring,
+        random_state=random_state,
+        disable_saved_preprocessing=disable_saved_preprocessing
+    )
+    
+    # Load data
+    X_text, y_text = text_trainer.load_data()
+    X_financial, y_financial = financial_trainer.load_data()
+    
+    # Load test data if provided
+    test_X_text = None
+    test_y_text = None
+    test_X_financial = None
+    test_y_financial = None
+    
+    if text_test_data and financial_test_data:
+        # Load test data for text domain
+        test_df_text = pd.read_csv(text_test_data)
+        exclude_cols_text = exclude_cols.copy() if exclude_cols else ['outperformance_10d', 'setup_id']
+        if label_col not in exclude_cols_text:
+            exclude_cols_text.append(label_col)
+        test_X_text = test_df_text.drop(columns=[col for col in exclude_cols_text if col in test_df_text.columns])
+        test_y_text = test_df_text[label_col].copy()
+        
+        # Load test data for financial domain
+        test_df_financial = pd.read_csv(financial_test_data)
+        exclude_cols_financial = exclude_cols.copy() if exclude_cols else ['outperformance_10d', 'setup_id']
+        if label_col not in exclude_cols_financial:
+            exclude_cols_financial.append(label_col)
+        test_X_financial = test_df_financial.drop(columns=[col for col in exclude_cols_financial if col in test_df_financial.columns])
+        test_y_financial = test_df_financial[label_col].copy()
+        
+        # Apply financial preprocessing to test data if available and not disabled
+        if not disable_saved_preprocessing:
+            try:
+                from financial_preprocessor import FinancialPreprocessor
+                preprocessor = FinancialPreprocessor()
+                
+                # Check if preprocessing parameters are available
+                if preprocessor.has_saved_parameters():
+                    logger.info("Applying saved financial preprocessing parameters to test data")
+                    test_X_financial = preprocessor.apply_preprocessing(test_X_financial)
+            except ImportError:
+                logger.warning("financial_preprocessor module not found, using raw features for test data")
+            except Exception as e:
+                logger.warning(f"Error applying financial preprocessing to test data: {e}")
+    
+    # Train and evaluate models
+    results = {}
+    
+    # Train text models
+    logger.info("Training text domain models...")
+    text_results = text_trainer.train_models_with_cv(
+        X_text,
+        y_text,
+        test_X_text,
+        test_y_text
+    )
+    results['text'] = text_results
+    
+    # Train financial models
+    logger.info("Training financial domain models...")
+    financial_results = financial_trainer.train_models_with_cv(
+        X_financial,
+        y_financial,
+        test_X_financial,
+        test_y_financial
+    )
+    results['financial'] = financial_results
+    
+    return results
+
 
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Train domain-specific ML models with cross-validation')
-    parser.add_argument('--text-data', required=True,
-                      help='Path to text ML features CSV')
-    parser.add_argument('--financial-data', required=True,
-                      help='Path to financial ML features CSV')
-    parser.add_argument('--text-test-data',
-                      help='Path to text ML features test CSV')
-    parser.add_argument('--financial-test-data',
-                      help='Path to financial ML features test CSV')
-    parser.add_argument('--output-dir', default='models',
-                      help='Directory to save trained models')
-    parser.add_argument('--label-col', default='label',
-                      help='Name of the label column')
-    parser.add_argument('--exclude-cols', nargs='+',
-                      default=['outperformance_10d'],
-                      help='Columns to exclude from features')
-    parser.add_argument('--models', nargs='+',
-                      default=['random_forest', 'xgboost', 'logistic_regression'],
-                      help='Models to train')
-    parser.add_argument('--cv', type=int, default=5,
-                      help='Number of cross-validation folds')
-    parser.add_argument('--scoring', default='precision_weighted',
-                      help='Scoring metric for cross-validation')
-    parser.add_argument('--random-state', type=int, default=42,
-                      help='Random state for reproducibility')
+    parser.add_argument('--text-data', required=True, help='Path to text ML features CSV')
+    parser.add_argument('--financial-data', required=True, help='Path to financial ML features CSV')
+    parser.add_argument('--text-test-data', help='Path to text ML features test CSV')
+    parser.add_argument('--financial-test-data', help='Path to financial ML features test CSV')
+    parser.add_argument('--output-dir', default='models', help='Directory to save trained models')
+    parser.add_argument('--label-col', default='label', help='Name of the label column')
+    parser.add_argument('--exclude-cols', nargs='+', default=['outperformance_10d', 'setup_id'], help='Columns to exclude from features')
+    parser.add_argument('--models', nargs='+', default=['random_forest', 'xgboost', 'logistic_regression'], help='Models to train')
+    parser.add_argument('--cv', type=int, default=5, help='Number of cross-validation folds')
+    parser.add_argument('--scoring', default='f1_weighted', help='Scoring metric for cross-validation')
+    parser.add_argument('--random-state', type=int, default=42, help='Random state for reproducibility')
+    parser.add_argument('--disable-saved-preprocessing', action='store_true', help='Disable loading saved preprocessing parameters for financial domain')
     
     args = parser.parse_args()
     
-    # Train text models
-    logger.info("=== Training Text Models with Cross-Validation ===")
-    
-    # Load text training data
-    logger.info(f"Loading text training data from {args.text_data}")
-    text_data = pd.read_csv(args.text_data)
-    
-    # Initialize text trainer
-    text_trainer = DomainMLTrainerCV(
-        domain='text',
+    # Train and evaluate models
+    results = train_and_evaluate(
+        text_data=args.text_data,
+        financial_data=args.financial_data,
+        text_test_data=args.text_test_data,
+        financial_test_data=args.financial_test_data,
         output_dir=args.output_dir,
-        cv=args.cv,
-        scoring=args.scoring,
-        random_state=args.random_state
-    )
-    
-    # Prepare text training data
-    X_text, y_text = text_trainer.prepare_data(
-        data=text_data,
         label_col=args.label_col,
-        exclude_cols=args.exclude_cols
-    )
-    
-    # Train text models with cross-validation
-    text_trainer.train_models_with_cv(
-        X=X_text,
-        y=y_text,
-        models_to_train=args.models
-    )
-    
-    # Save text models
-    text_trainer.save_models()
-    
-    # Evaluate text models on test data if provided
-    if args.text_test_data:
-        logger.info(f"Loading text test data from {args.text_test_data}")
-        text_test_data = pd.read_csv(args.text_test_data)
-        
-        # Prepare text test data
-        X_text_test, y_text_test = text_trainer.prepare_data(
-            data=text_test_data,
-            label_col=args.label_col,
-            exclude_cols=args.exclude_cols
-        )
-        
-        # Evaluate text models on test data
-        text_trainer.evaluate_on_test_data(
-            X_test=X_text_test,
-            y_test=y_text_test
-        )
-    
-    # Train financial models
-    logger.info("\n=== Training Financial Models with Cross-Validation ===")
-    
-    # Load financial training data
-    logger.info(f"Loading financial training data from {args.financial_data}")
-    financial_data = pd.read_csv(args.financial_data)
-    
-    # Initialize financial trainer
-    financial_trainer = DomainMLTrainerCV(
-        domain='financial',
-        output_dir=args.output_dir,
-        cv=args.cv,
+        exclude_cols=args.exclude_cols,
+        models=args.models,
+        cv_folds=args.cv,
         scoring=args.scoring,
-        random_state=args.random_state
+        random_state=args.random_state,
+        disable_saved_preprocessing=args.disable_saved_preprocessing
     )
     
-    # Prepare financial training data
-    X_financial, y_financial = financial_trainer.prepare_data(
-        data=financial_data,
-        label_col=args.label_col,
-        exclude_cols=args.exclude_cols
-    )
-    
-    # Train financial models with cross-validation
-    financial_trainer.train_models_with_cv(
-        X=X_financial,
-        y=y_financial,
-        models_to_train=args.models
-    )
-    
-    # Save financial models
-    financial_trainer.save_models()
-    
-    # Evaluate financial models on test data if provided
-    if args.financial_test_data:
-        logger.info(f"Loading financial test data from {args.financial_test_data}")
-        financial_test_data = pd.read_csv(args.financial_test_data)
-        
-        # Prepare financial test data
-        X_financial_test, y_financial_test = financial_trainer.prepare_data(
-            data=financial_test_data,
-            label_col=args.label_col,
-            exclude_cols=args.exclude_cols
-        )
-        
-        # Evaluate financial models on test data
-        financial_trainer.evaluate_on_test_data(
-            X_test=X_financial_test,
-            y_test=y_financial_test
-        )
-    
-    logger.info("\n=== Training Complete ===")
-    logger.info(f"Models saved to {args.output_dir}")
+    logger.info("Training completed successfully!")
+
 
 if __name__ == '__main__':
     main() 
