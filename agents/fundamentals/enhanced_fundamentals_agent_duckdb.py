@@ -101,19 +101,40 @@ class EnhancedFundamentalsAgentDuckDB:
         lancedb_dir: str = "../lancedb_store",
         table_name: str = "fundamentals_embeddings",
         llm_model: str = "gpt-4o-mini",
-        mode: str = "training"  # Either "training" or "prediction"
+        mode: str = "training",  # Either "training" or "prediction"
+        use_cached_models: bool = False,
+        local_files_only: bool = False
     ):
+        """
+        Initialize the Enhanced Fundamentals Agent
+        
+        Args:
+            db_path: Path to DuckDB database
+            lancedb_dir: Path to LanceDB directory
+            table_name: Name of the embedding table
+            llm_model: LLM model to use
+            mode: Either "training" or "prediction"
+            use_cached_models: Whether to use cached models
+            local_files_only: Whether to only use local files
+        """
         self.db_path = db_path
         self.lancedb_dir = lancedb_dir
         self.table_name = table_name
         self.llm_model = llm_model
         self.mode = mode
+        self.use_cached_models = use_cached_models
+        self.local_files_only = local_files_only
+        
+        if self.use_cached_models:
+            logger.info('Using cached models (offline mode)')
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'
+            os.environ['HF_DATASETS_OFFLINE'] = '1'
         
         # Initialize setup validator
         self.setup_validator = SetupValidatorDuckDB(db_path)
         
         # Initialize OpenAI client
-        self.openai_client = OpenAI()
+        self.client = OpenAI()
         
         # Connect to LanceDB
         self._connect_to_lancedb()
@@ -343,7 +364,7 @@ Extract the following features as JSON:
 Focus only on financial performance, earnings, profit warnings, and capital structure changes."""
         
         try:
-            response = self.openai_client.chat.completions.create(
+            response = self.client.chat.completions.create(
                 model=self.llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,

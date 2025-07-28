@@ -103,10 +103,7 @@ class UserPostsFeatureSchema(BaseModel):
                 raise ValueError(f"Topic '{topic}' not in allowed values: {allowed_topics}")
 
 class EnhancedUserPostsAgentComplete:
-    """
-    Enhanced UserPosts Agent using complete retrieval pattern
-    Similar to EnhancedNewsAgentDuckDB but for UserPosts domain
-    """
+    """Enhanced UserPosts Agent with complete retrieval pattern"""
     
     def __init__(
         self,
@@ -115,20 +112,42 @@ class EnhancedUserPostsAgentComplete:
         table_name: str = "userposts_embeddings",
         llm_model: str = "gpt-4o-mini",
         max_group_size: int = 20,  # Max posts per LLM call before chunking
-        mode: str = "training"  # Either "training" or "prediction"
+        mode: str = "training",  # Either "training" or "prediction"
+        use_cached_models: bool = False,
+        local_files_only: bool = False
     ):
+        """
+        Initialize the Enhanced UserPosts Agent
+        
+        Args:
+            db_path: Path to DuckDB database
+            lancedb_dir: Path to LanceDB directory
+            table_name: Name of the embedding table
+            llm_model: LLM model to use
+            max_group_size: Maximum number of posts per LLM call before chunking
+            mode: Either "training" or "prediction"
+            use_cached_models: Whether to use cached models
+            local_files_only: Whether to only use local files
+        """
         self.db_path = db_path
         self.lancedb_dir = lancedb_dir
         self.table_name = table_name
         self.llm_model = llm_model
         self.max_group_size = max_group_size
         self.mode = mode
+        self.use_cached_models = use_cached_models
+        self.local_files_only = local_files_only
+        
+        if self.use_cached_models:
+            logger.info('Using cached models (offline mode)')
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'
+            os.environ['HF_DATASETS_OFFLINE'] = '1'
         
         # Initialize setup validator
         self.setup_validator = SetupValidatorDuckDB(db_path)
         
         # Initialize OpenAI client
-        self.openai_client = OpenAI()
+        self.client = OpenAI()
         
         # Connect to LanceDB
         self._connect_to_lancedb()
@@ -136,7 +155,7 @@ class EnhancedUserPostsAgentComplete:
         # Initialize DuckDB feature storage
         self._init_duckdb_feature_storage()
         
-        logger.info(f"Enhanced UserPosts Agent (Complete) initialized successfully in {mode} mode")
+        logger.info(f"Enhanced UserPosts Agent initialized in {mode} mode")
     
     def check_setup_has_posts(self, setup_id: str) -> bool:
         """Check if a setup has any user posts"""
@@ -359,7 +378,7 @@ class EnhancedUserPostsAgentComplete:
         prompt = self._load_prompt_template(context)
         
         try:
-            response = self.openai_client.chat.completions.create(
+            response = self.client.chat.completions.create(
                 model=self.llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,

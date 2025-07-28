@@ -80,6 +80,64 @@ MAX_ITEMS_PER_GROUP = 10
 SIMILARITY_THRESHOLD = 0.7
 DEFAULT_SIMILARITY_LIMIT = 10
 
+class NewsFeatureSchema(BaseModel):
+    """Pydantic schema for News feature extraction (matches feature_plan.md exactly)"""
+    
+    # Metadata
+    setup_id: str
+    extraction_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    llm_model: str = "gpt-4o-mini"
+    
+    # Financial Results group (7 features)
+    count_financial_results: int = Field(ge=0)
+    max_severity_financial_results: float = Field(ge=0.0, le=1.0)
+    avg_headline_spin_financial_results: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
+    sentiment_score_financial_results: float = Field(ge=-1.0, le=1.0)
+    profit_warning_present: bool
+    synthetic_summary_financial_results: str = Field(max_length=240)
+    cot_explanation_financial_results: str
+    
+    # Corporate Actions group (7 features)
+    count_corporate_actions: int = Field(ge=0)
+    max_severity_corporate_actions: float = Field(ge=0.0, le=1.0)
+    avg_headline_spin_corporate_actions: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
+    sentiment_score_corporate_actions: float = Field(ge=-1.0, le=1.0)
+    capital_raise_present: bool
+    synthetic_summary_corporate_actions: str = Field(max_length=240)
+    cot_explanation_corporate_actions: str
+    
+    # Governance group (7 features)
+    count_governance: int = Field(ge=0)
+    max_severity_governance: float = Field(ge=0.0, le=1.0)
+    avg_headline_spin_governance: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
+    sentiment_score_governance: float = Field(ge=-1.0, le=1.0)
+    board_change_present: bool
+    synthetic_summary_governance: str = Field(max_length=240)
+    cot_explanation_governance: str
+    
+    # Corporate Events group (8 features)
+    count_corporate_events: int = Field(ge=0)
+    max_severity_corporate_events: float = Field(ge=0.0, le=1.0)
+    avg_headline_spin_corporate_events: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
+    sentiment_score_corporate_events: float = Field(ge=-1.0, le=1.0)
+    contract_award_present: bool
+    merger_or_acquisition_present: bool
+    synthetic_summary_corporate_events: str = Field(max_length=240)
+    cot_explanation_corporate_events: str
+    
+    # Other Signals group (8 features)
+    count_other_signals: int = Field(ge=0)
+    max_severity_other_signals: float = Field(ge=0.0, le=1.0)
+    avg_headline_spin_other_signals: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
+    sentiment_score_other_signals: float = Field(ge=-1.0, le=1.0)
+    broker_recommendation_present: bool
+    credit_rating_change_present: bool
+    synthetic_summary_other_signals: str = Field(max_length=240)
+    cot_explanation_other_signals: str
+    
+    # Global explanation
+    cot_explanation_news_grouped: str
+
 class EnhancedNewsAgentDuckDB:
     """Enhanced News Agent for DuckDB with embedding-based similarity search"""
     
@@ -1516,6 +1574,111 @@ Extract the features as JSON:"""
             logger.info("Enhanced News Agent cleaned up successfully")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
+
+
+class NewsEmbeddingPipelineDuckDB:
+    """Pipeline for creating and storing news embeddings in DuckDB"""
+    
+    def __init__(
+        self,
+        db_path: str = "data/sentiment_system.duckdb",
+        lancedb_dir: str = "lancedb_store",
+        embedding_model_name: str = DEFAULT_EMBEDDING_MODEL,
+        mode: str = "training"  # Either "training" or "prediction"
+    ):
+        self.db_path = db_path
+        self.lancedb_dir = lancedb_dir
+        self.embedding_model_name = embedding_model_name
+        self.mode = mode
+        
+        # Initialize embedding model
+        self.embedding_model = SentenceTransformer(embedding_model_name)
+        
+        # Connect to LanceDB
+        self.db = lancedb.connect(lancedb_dir)
+        
+        # Table name depends on mode
+        self.table_name = f"news_embeddings_{mode}"
+        
+        # Create table if it doesn't exist
+        self._create_table_if_not_exists()
+        
+    def _create_table_if_not_exists(self):
+        """Create embedding table if it doesn't exist"""
+        try:
+            # Check if table exists
+            tables = self.db.table_names()
+            if self.table_name not in tables:
+                # Create schema
+                schema = {
+                    "setup_id": "string",
+                    "text": "string",
+                    "vector": "float32[384]",  # Adjust dimension based on model
+                    "headline": "string",
+                    "category": "string",
+                    "group": "string",
+                    "date": "string",
+                    "source": "string"
+                }
+                
+                # Create empty table
+                self.db.create_table(
+                    self.table_name,
+                    schema=schema,
+                    mode="overwrite"
+                )
+                
+                logger.info(f"Created new embedding table: {self.table_name}")
+            
+            # Open the table
+            self.table = self.db.open_table(self.table_name)
+            logger.info(f"Connected to embedding table: {self.table_name}")
+            
+        except Exception as e:
+            logger.error(f"Error creating/opening embedding table: {e}")
+            self.table = None
+    
+    def create_embedding(
+        self,
+        setup_id: str,
+        text: str,
+        metadata: Dict[str, Any]
+    ) -> bool:
+        """
+        Create and store embedding for a text
+        
+        Args:
+            setup_id: Setup ID
+            text: Text to embed
+            metadata: Additional metadata
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Generate embedding
+            embedding = self.embedding_model.encode(text)
+            
+            # Prepare data for insertion
+            data = {
+                "setup_id": setup_id,
+                "text": text[:1000],  # Truncate text to avoid storage issues
+                "vector": embedding,
+                "headline": metadata.get("headline", "")[:200],
+                "category": metadata.get("category", "")[:50],
+                "group": metadata.get("group", "")[:50],
+                "date": metadata.get("date", "")[:50],
+                "source": metadata.get("source", "")[:50]
+            }
+            
+            # Add to table
+            self.table.add([data])
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error creating embedding: {e}")
+            return False
 
 
 def main():
