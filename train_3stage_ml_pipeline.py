@@ -25,7 +25,7 @@ from typing import Dict, List, Any, Tuple
 from scipy.stats import pearsonr
 
 # ML libraries
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, cross_validate
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -66,7 +66,14 @@ class ThreeStageMLPipeline:
         self.financial_model_dir = self.output_dir / "financial"
         self.ensemble_model_dir = self.output_dir / "ensemble"
         
-        for dir_path in [self.text_model_dir, self.financial_model_dir, self.ensemble_model_dir]:
+        # Create analysis directories for detailed per-model results
+        self.analysis_dir = Path("ml/analysis")
+        self.text_analysis_dir = self.analysis_dir / "text_ml"
+        self.financial_analysis_dir = self.analysis_dir / "financial_ml"
+        self.ensemble_analysis_dir = self.analysis_dir / "ensemble"
+        
+        for dir_path in [self.text_model_dir, self.financial_model_dir, self.ensemble_model_dir,
+                        self.text_analysis_dir, self.financial_analysis_dir, self.ensemble_analysis_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
             
         # Initialize feature loader
@@ -109,6 +116,179 @@ class ThreeStageMLPipeline:
             
         logger.info(f"Initialized pipeline with {len(self.model_configs)} models: {list(self.model_configs.keys())}")
         
+    def perform_detailed_cross_validation(self, pipeline, X, y, model_name: str, stage: str) -> Dict[str, Any]:
+        """Perform detailed cross-validation with comprehensive metrics for each fold"""
+        logger.info(f"  🔄 Performing detailed cross-validation for {stage} {model_name}")
+        
+        # Define scoring metrics
+        scoring = ['accuracy', 'precision_macro', 'recall_macro', 'f1_macro', 
+                  'precision_weighted', 'recall_weighted', 'f1_weighted']
+        
+        # Perform cross-validation
+        cv_results = cross_validate(
+            pipeline, X, y, 
+            cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=self.random_state),
+            scoring=scoring,
+            return_train_score=True,
+            n_jobs=-1
+        )
+        
+        # Calculate mean and std for each metric
+        cv_summary = {}
+        for metric in scoring:
+            cv_summary[f'{metric}_mean'] = cv_results[f'test_{metric}'].mean()
+            cv_summary[f'{metric}_std'] = cv_results[f'test_{metric}'].std()
+            cv_summary[f'train_{metric}_mean'] = cv_results[f'train_{metric}'].mean()
+            cv_summary[f'train_{metric}_std'] = cv_results[f'train_{metric}'].std()
+            
+        # Add individual fold results
+        cv_summary['cv_folds'] = {
+            metric: cv_results[f'test_{metric}'].tolist() for metric in scoring
+        }
+        
+        # Save detailed CV results to CSV
+        cv_df = pd.DataFrame({
+            'Fold': range(1, 6),
+            'Accuracy': cv_results['test_accuracy'],
+            'Precision_Macro': cv_results['test_precision_macro'],
+            'Recall_Macro': cv_results['test_recall_macro'],
+            'F1_Macro': cv_results['test_f1_macro'],
+            'Precision_Weighted': cv_results['test_precision_weighted'],
+            'Recall_Weighted': cv_results['test_recall_weighted'],
+            'F1_Weighted': cv_results['test_f1_weighted']
+        })
+        
+        # Save to appropriate analysis directory
+        if stage == 'text':
+            analysis_dir = self.text_analysis_dir
+        elif stage == 'financial':
+            analysis_dir = self.financial_analysis_dir
+        else:
+            analysis_dir = self.ensemble_analysis_dir
+            
+        cv_file = analysis_dir / f"{model_name}_cv_results.csv"
+        cv_df.to_csv(cv_file, index=False)
+        
+        logger.info(f"    📊 CV Results - Accuracy: {cv_summary['accuracy_mean']:.4f} (±{cv_summary['accuracy_std']:.4f})")
+        logger.info(f"    📊 CV Results - Precision: {cv_summary['precision_macro_mean']:.4f} (±{cv_summary['precision_macro_std']:.4f})")
+        
+        return cv_summary
+        
+    def generate_individual_model_visualizations(self, pipeline, X_test, y_test, model_name: str, 
+                                                stage: str, feature_names: List[str]) -> None:
+        """Generate detailed visualizations for individual models"""
+        
+        # Determine analysis directory
+        if stage == 'text':
+            analysis_dir = self.text_analysis_dir
+        elif stage == 'financial':
+            analysis_dir = self.financial_analysis_dir
+        else:
+            analysis_dir = self.ensemble_analysis_dir
+            
+        # 1. Feature Importance Plot
+        self._generate_feature_importance_plot(pipeline, model_name, stage, feature_names, analysis_dir)
+        
+        # 2. Confusion Matrix
+        self._generate_confusion_matrix_plot(pipeline, X_test, y_test, model_name, stage, analysis_dir)
+        
+        # 3. Classification Report (text)
+        self._generate_classification_report(pipeline, X_test, y_test, model_name, stage, analysis_dir)
+        
+    def _generate_feature_importance_plot(self, pipeline, model_name: str, stage: str, 
+                                        feature_names: List[str], analysis_dir: Path) -> None:
+        """Generate feature importance plot for individual model"""
+        
+        # Extract feature importance
+        feature_importance = None
+        if hasattr(pipeline[-1], 'feature_importances_'):
+            feature_importance = pipeline[-1].feature_importances_
+        elif hasattr(pipeline[-1], 'coef_'):
+            # For logistic regression, use absolute coefficients
+            feature_importance = np.abs(pipeline[-1].coef_).mean(axis=0)
+        
+        if feature_importance is None:
+            logger.warning(f"No feature importance available for {stage} {model_name}")
+            return
+            
+        # Create DataFrame for easier handling
+        importance_df = pd.DataFrame({
+            'feature': feature_names,
+            'importance': feature_importance
+        }).sort_values('importance', ascending=True)
+        
+        # Take top 20 features
+        top_features = importance_df.tail(20)
+        
+        # Create plot
+        plt.figure(figsize=(10, 8))
+        plt.barh(range(len(top_features)), top_features['importance'], color='skyblue')
+        plt.yticks(range(len(top_features)), top_features['feature'])
+        plt.xlabel('Feature Importance')
+        plt.title(f'{stage.title()} ML - {model_name.title()} - Top 20 Features')
+        plt.tight_layout()
+        
+        # Save plot
+        plot_file = analysis_dir / f"{model_name}_feature_importance.png"
+        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Save importance data
+        importance_file = analysis_dir / f"{model_name}_feature_importance.csv"
+        importance_df.to_csv(importance_file, index=False)
+        
+        logger.info(f"    📊 Saved {model_name} feature importance to {plot_file}")
+        
+    def _generate_confusion_matrix_plot(self, pipeline, X_test, y_test, model_name: str, 
+                                      stage: str, analysis_dir: Path) -> None:
+        """Generate confusion matrix plot for individual model"""
+        
+        y_pred = pipeline.predict(X_test)
+        cm = confusion_matrix(y_test, y_pred)
+        
+        # Create plot
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                   xticklabels=self.class_names, yticklabels=self.class_names)
+        plt.title(f'{stage.title()} ML - {model_name.title()} - Confusion Matrix')
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        plt.tight_layout()
+        
+        # Save plot
+        plot_file = analysis_dir / f"{model_name}_confusion_matrix.png"
+        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"    📊 Saved {model_name} confusion matrix to {plot_file}")
+        
+    def _generate_classification_report(self, pipeline, X_test, y_test, model_name: str, 
+                                      stage: str, analysis_dir: Path) -> None:
+        """Generate classification report for individual model"""
+        
+        y_pred = pipeline.predict(X_test)
+        
+        # Generate classification report
+        report = classification_report(y_test, y_pred, target_names=self.class_names, 
+                                     output_dict=True, zero_division=0)
+        
+        # Save as text report
+        report_text = classification_report(y_test, y_pred, target_names=self.class_names, 
+                                          zero_division=0)
+        
+        report_file = analysis_dir / f"{model_name}_classification_report.txt"
+        with open(report_file, 'w') as f:
+            f.write(f"{stage.title()} ML - {model_name.title()} - Classification Report\n")
+            f.write("=" * 60 + "\n")
+            f.write(report_text)
+            
+        # Save as CSV for easier analysis
+        report_df = pd.DataFrame(report).transpose()
+        csv_file = analysis_dir / f"{model_name}_classification_report.csv"
+        report_df.to_csv(csv_file)
+        
+        logger.info(f"    📊 Saved {model_name} classification report to {report_file}")
+
     def train_stage1_text_models(self) -> Dict[str, Any]:
         """Stage 1: Train text-based ML models"""
         logger.info("🔤 Stage 1: Training Text-based ML Models")
@@ -142,7 +322,10 @@ class ThreeStageMLPipeline:
                 ('classifier', clone(model_config))
             ])
             
-            # Train model
+            # Perform detailed cross-validation
+            cv_results = self.perform_detailed_cross_validation(pipeline, X_train, y_train, model_name, 'text')
+            
+            # Train model on full training set
             pipeline.fit(X_train, y_train)
             
             # Predictions and probabilities
@@ -159,20 +342,22 @@ class ThreeStageMLPipeline:
             # Comprehensive evaluation
             eval_results = self.evaluate_model(pipeline, X_test, y_test, model_name)
             
-            # Cross-validation
-            cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='accuracy')
+            # Generate individual model visualizations
+            feature_names = list(X_text.columns)
+            self.generate_individual_model_visualizations(pipeline, X_test, y_test, model_name, 'text', feature_names)
             
             # Log results
-            logger.info(f"    ✅ Accuracy: {eval_results['accuracy']:.4f}, Precision: {eval_results['precision_macro']:.4f}, CV: {cv_scores.mean():.4f} (±{cv_scores.std():.4f})")
+            logger.info(f"    ✅ Accuracy: {eval_results['accuracy']:.4f}, Precision: {eval_results['precision_macro']:.4f}")
             logger.info(f"    📊 Class-wise Precision: Neg={eval_results['precision_per_class'][0]:.3f}, Neu={eval_results['precision_per_class'][1]:.3f}, Pos={eval_results['precision_per_class'][2]:.3f}")
             
-            # Store results
-            text_models[model_name] = pipeline
+            # Store results including CV results
             text_results[model_name] = {
                 **eval_results,
-                'cv_mean': cv_scores.mean(),
-                'cv_std': cv_scores.std()
+                **cv_results
             }
+            
+            # Store model
+            text_models[model_name] = pipeline
             
             # Save model
             model_path = self.text_model_dir / f"text_{model_name}.pkl"
@@ -236,7 +421,10 @@ class ThreeStageMLPipeline:
                 ('classifier', clone(model_config))
             ])
             
-            # Train model
+            # Perform detailed cross-validation
+            cv_results = self.perform_detailed_cross_validation(pipeline, X_train, y_train, model_name, 'financial')
+            
+            # Train model on full training set
             pipeline.fit(X_train, y_train)
             
             # Predictions and probabilities
@@ -253,20 +441,22 @@ class ThreeStageMLPipeline:
             # Comprehensive evaluation
             eval_results = self.evaluate_model(pipeline, X_test, y_test, model_name)
             
-            # Cross-validation
-            cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='accuracy')
+            # Generate individual model visualizations
+            feature_names = list(X_financial.columns)
+            self.generate_individual_model_visualizations(pipeline, X_test, y_test, model_name, 'financial', feature_names)
             
             # Log results
-            logger.info(f"    ✅ Accuracy: {eval_results['accuracy']:.4f}, Precision: {eval_results['precision_macro']:.4f}, CV: {cv_scores.mean():.4f} (±{cv_scores.std():.4f})")
+            logger.info(f"    ✅ Accuracy: {eval_results['accuracy']:.4f}, Precision: {eval_results['precision_macro']:.4f}")
             logger.info(f"    📊 Class-wise Precision: Neg={eval_results['precision_per_class'][0]:.3f}, Neu={eval_results['precision_per_class'][1]:.3f}, Pos={eval_results['precision_per_class'][2]:.3f}")
             
-            # Store results
-            financial_models[model_name] = pipeline
+            # Store results including CV results
             financial_results[model_name] = {
                 **eval_results,
-                'cv_mean': cv_scores.mean(),
-                'cv_std': cv_scores.std()
+                **cv_results
             }
+            
+            # Store model
+            financial_models[model_name] = pipeline
             
             # Save model
             model_path = self.financial_model_dir / f"financial_{model_name}.pkl"
@@ -497,7 +687,10 @@ class ThreeStageMLPipeline:
                 ('classifier', clone(model_config))
             ])
             
-            # Train ensemble model
+            # Perform detailed cross-validation
+            cv_results = self.perform_detailed_cross_validation(pipeline, ensemble_X_train, y_train, model_name, 'ensemble')
+            
+            # Train ensemble model on full training set
             pipeline.fit(ensemble_X_train, y_train)
             
             # Predictions
@@ -507,20 +700,22 @@ class ThreeStageMLPipeline:
             # Comprehensive evaluation
             eval_results = self.evaluate_model(pipeline, ensemble_X_test, y_test, model_name)
             
-            # Cross-validation
-            cv_scores = cross_val_score(pipeline, ensemble_X_train, y_train, cv=5, scoring='accuracy')
+            # Generate individual model visualizations
+            feature_names = list(ensemble_X_train.columns)
+            self.generate_individual_model_visualizations(pipeline, ensemble_X_test, y_test, model_name, 'ensemble', feature_names)
             
             # Log results
-            logger.info(f"    ✅ Accuracy: {eval_results['accuracy']:.4f}, Precision: {eval_results['precision_macro']:.4f}, CV: {cv_scores.mean():.4f} (±{cv_scores.std():.4f})")
+            logger.info(f"    ✅ Accuracy: {eval_results['accuracy']:.4f}, Precision: {eval_results['precision_macro']:.4f}")
             logger.info(f"    📊 Class-wise Precision: Neg={eval_results['precision_per_class'][0]:.3f}, Neu={eval_results['precision_per_class'][1]:.3f}, Pos={eval_results['precision_per_class'][2]:.3f}")
             
-            # Store results
-            ensemble_models[model_name] = pipeline
+            # Store results including CV results
             ensemble_results[model_name] = {
                 **eval_results,
-                'cv_mean': cv_scores.mean(),
-                'cv_std': cv_scores.std()
+                **cv_results
             }
+            
+            # Store model
+            ensemble_models[model_name] = pipeline
             
             # Save model
             model_path = self.ensemble_model_dir / f"ensemble_{model_name}.pkl"
@@ -749,7 +944,9 @@ class ThreeStageMLPipeline:
                 f.write(f"  Precision by class: Neg={result['precision_per_class'][0]:.3f}, Neu={result['precision_per_class'][1]:.3f}, Pos={result['precision_per_class'][2]:.3f}\n")
                 f.write(f"  Recall by class: Neg={result['recall_per_class'][0]:.3f}, Neu={result['recall_per_class'][1]:.3f}, Pos={result['recall_per_class'][2]:.3f}\n")
                 f.write(f"  F1 by class: Neg={result['f1_per_class'][0]:.3f}, Neu={result['f1_per_class'][1]:.3f}, Pos={result['f1_per_class'][2]:.3f}\n")
-                f.write(f"  CV Score: {result['cv_mean']:.4f} (±{result['cv_std']:.4f})\n\n")
+                f.write(f"  CV Accuracy: {result['accuracy_mean']:.4f} (±{result['accuracy_std']:.4f})\n")
+                f.write(f"  CV Precision: {result['precision_macro_mean']:.4f} (±{result['precision_macro_std']:.4f})\n")
+                f.write(f"  CV F1: {result['f1_macro_mean']:.4f} (±{result['f1_macro_std']:.4f})\n\n")
                 
             # Stage 2: Financial Results
             f.write("STAGE 2: FINANCIAL ML RESULTS\n")
@@ -761,7 +958,9 @@ class ThreeStageMLPipeline:
                 f.write(f"  Precision by class: Neg={result['precision_per_class'][0]:.3f}, Neu={result['precision_per_class'][1]:.3f}, Pos={result['precision_per_class'][2]:.3f}\n")
                 f.write(f"  Recall by class: Neg={result['recall_per_class'][0]:.3f}, Neu={result['recall_per_class'][1]:.3f}, Pos={result['recall_per_class'][2]:.3f}\n")
                 f.write(f"  F1 by class: Neg={result['f1_per_class'][0]:.3f}, Neu={result['f1_per_class'][1]:.3f}, Pos={result['f1_per_class'][2]:.3f}\n")
-                f.write(f"  CV Score: {result['cv_mean']:.4f} (±{result['cv_std']:.4f})\n\n")
+                f.write(f"  CV Accuracy: {result['accuracy_mean']:.4f} (±{result['accuracy_std']:.4f})\n")
+                f.write(f"  CV Precision: {result['precision_macro_mean']:.4f} (±{result['precision_macro_std']:.4f})\n")
+                f.write(f"  CV F1: {result['f1_macro_mean']:.4f} (±{result['f1_macro_std']:.4f})\n\n")
             
             # Domain Correlation Analysis
             f.write("DOMAIN CORRELATION ANALYSIS\n")
@@ -790,7 +989,9 @@ class ThreeStageMLPipeline:
                 f.write(f"  Precision by class: Neg={result['precision_per_class'][0]:.3f}, Neu={result['precision_per_class'][1]:.3f}, Pos={result['precision_per_class'][2]:.3f}\n")
                 f.write(f"  Recall by class: Neg={result['recall_per_class'][0]:.3f}, Neu={result['recall_per_class'][1]:.3f}, Pos={result['recall_per_class'][2]:.3f}\n")
                 f.write(f"  F1 by class: Neg={result['f1_per_class'][0]:.3f}, Neu={result['f1_per_class'][1]:.3f}, Pos={result['f1_per_class'][2]:.3f}\n")
-                f.write(f"  CV Score: {result['cv_mean']:.4f} (±{result['cv_std']:.4f})\n\n")
+                f.write(f"  CV Accuracy: {result['accuracy_mean']:.4f} (±{result['accuracy_std']:.4f})\n")
+                f.write(f"  CV Precision: {result['precision_macro_mean']:.4f} (±{result['precision_macro_std']:.4f})\n")
+                f.write(f"  CV F1: {result['f1_macro_mean']:.4f} (±{result['f1_macro_std']:.4f})\n\n")
                 
             # Best models
             f.write("BEST PERFORMING MODELS\n")
@@ -825,9 +1026,39 @@ class ThreeStageMLPipeline:
             f.write(f"  it is correct {best_precision_positive:.1%} of the time.\n")
             f.write(f"- This minimizes false positives (entering bad trades).\n\n")
             
+            # Output Files Summary
+            f.write("OUTPUT FILES SUMMARY\n")
+            f.write("-" * 30 + "\n")
+            f.write("Individual Model Analysis (per model):\n")
+            f.write("- ml/analysis/text_ml/[model]_cv_results.csv\n")
+            f.write("- ml/analysis/text_ml/[model]_feature_importance.png/.csv\n")
+            f.write("- ml/analysis/text_ml/[model]_confusion_matrix.png\n")
+            f.write("- ml/analysis/text_ml/[model]_classification_report.txt/.csv\n")
+            f.write("\n")
+            f.write("- ml/analysis/financial_ml/[model]_cv_results.csv\n")
+            f.write("- ml/analysis/financial_ml/[model]_feature_importance.png/.csv\n")
+            f.write("- ml/analysis/financial_ml/[model]_confusion_matrix.png\n")
+            f.write("- ml/analysis/financial_ml/[model]_classification_report.txt/.csv\n")
+            f.write("\n")
+            f.write("- ml/analysis/ensemble/[model]_cv_results.csv\n")
+            f.write("- ml/analysis/ensemble/[model]_feature_importance.png/.csv\n")
+            f.write("- ml/analysis/ensemble/[model]_confusion_matrix.png\n")
+            f.write("- ml/analysis/ensemble/[model]_classification_report.txt/.csv\n")
+            f.write("\n")
+            f.write("Models available: random_forest, logistic_regression")
+            if HAS_XGBOOST:
+                f.write(", xgboost")
+            if HAS_LIGHTGBM:
+                f.write(", lightgbm")
+            f.write("\n\n")
+            
             f.write("=" * 50 + "\n")
             
         logger.info(f"📄 Final report saved to {report_path}")
+        logger.info(f"📊 Detailed analysis files available in:")
+        logger.info(f"   - ml/analysis/text_ml/")
+        logger.info(f"   - ml/analysis/financial_ml/")
+        logger.info(f"   - ml/analysis/ensemble/")
 
 
 def main():
