@@ -314,12 +314,27 @@ python make_agent_predictions.py --setup-list data/prediction_setups.txt
 
 **What it does:**
 - Loads the thresholds saved during the label balancing step
-- Makes predictions for each domain using these consistent thresholds
-- Combines predictions into an ensemble prediction
+- Uses existing domain agent features to make predictions
+- Applies consistent thresholds to convert predictions to -1/0/1 format
+- Combines predictions into an ensemble prediction using confidence-weighted voting
 - Saves all predictions to the similarity_predictions table
 - Ensures that both ML models and domain agents use the same classification thresholds
 
+**Current Limitations:**
+- The agent prompts themselves have NOT been updated to explicitly predict outperformance_10d
+- This script processes existing agent features rather than generating new predictions
+- To improve agent predictions, the actual LLM prompts in agent files need to be updated
+
 **Note:** This step is placed after label balancing to ensure that agent predictions use the same thresholds as ML models.
+
+**Future Enhancement Needed:**
+To truly improve agent predictions, the LLM prompts in these files should be updated:
+- `agents/fundamentals/enhanced_fundamentals_agent_duckdb.py`
+- `agents/news/enhanced_news_agent_duckdb.py`
+- `agents/analyst_recommendations/enhanced_analyst_recommendations_agent_duckdb.py`
+- `agents/userposts/enhanced_userposts_agent_complete.py`
+
+These prompts should explicitly ask agents to predict outperformance_10d based on their domain expertise.
 
 ### 11. Train ML Models with 3-Stage Pipeline
 
@@ -335,7 +350,7 @@ Train ML models using the proper 3-stage approach:
 
 ```bash
 conda activate sts
-python train_3stage_ml_pipeline.py --output-dir models_3stage_corrected
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed
 ```
 
 **What it does:**
@@ -346,12 +361,16 @@ python train_3stage_ml_pipeline.py --output-dir models_3stage_corrected
 - Saves models in separate directories: `text/`, `financial/`, `ensemble/`
 - Applies proper imputation, scaling, and handles -1/0/1 labels → 0/1/2 for sklearn
 - Generates confusion matrices and comprehensive training report
+- **NEW:** Performs detailed cross-validation for each individual model
+- **NEW:** Generates detailed per-model visualizations and metrics in `ml/analysis/` directories
+- **NEW:** Fixed data leakage in ensemble training using proper nested cross-validation
 
 **Key Features:**
 - Consistent setup IDs across text and financial data
 - Proper feature preprocessing with saved transformation parameters
 - Cross-validation for model evaluation
 - Ensemble meta-learning from individual model predictions
+- Individual model analysis and visualizations
 
 **Note on Warnings:**
 - You may see warnings about "X does not have valid feature names" from LightGBM - these can be safely ignored
@@ -364,7 +383,7 @@ Create ensemble predictions using the trained 3-stage ML pipeline:
 
 ```bash
 conda activate sts
-python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --models-dir models_3stage_corrected --output-dir data/predictions_corrected
+python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models_3stage_fixed --output-dir ml/prediction
 ```
 
 **What it does:**
@@ -373,16 +392,18 @@ python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --mod
   1. **Stage 1**: Apply 4 text models to text features → get 12 prediction vectors
   2. **Stage 2**: Apply 4 financial models to financial features → get 12 prediction vectors  
   3. **Stage 3**: Apply 4 ensemble meta-models to the 24 prediction vectors → get final predictions
+- **NEW:** Implements confidence-weighted ensemble voting for final predictions
+- **NEW:** Organizes results into structured directories (`ml/prediction/text_ml/`, `ml/prediction/financial_ml/`, `ml/prediction/ensemble/`)
+- **NEW:** Each prediction file includes confidence scores and class probabilities
 - Outputs final ensemble predictions with confidence scores
-- Provides predictions from individual text and financial models for analysis
-- Suppresses irrelevant warnings about feature names
+- Provides predictions from individual models for analysis
 
 **Output Files:**
-- `ensemble_predictions_{timestamp}.csv` - Final ensemble predictions
-- `text_predictions_{timestamp}.csv` - Individual text model predictions
-- `financial_predictions_{timestamp}.csv` - Individual financial model predictions
-- `prediction_report_{timestamp}.txt` - Comprehensive prediction summary
-- `final_predictions_{timestamp}.csv` - Final predictions with confidence scores
+- `ml/prediction/final_predictions_{timestamp}.csv` - Final confidence-weighted predictions
+- `ml/prediction/prediction_summary_{timestamp}.txt` - Comprehensive prediction summary
+- `ml/prediction/text_ml/text_{model}_predictions.csv` - Individual text model predictions
+- `ml/prediction/financial_ml/financial_{model}_predictions.csv` - Individual financial model predictions
+- `ml/prediction/ensemble/ensemble_{model}_predictions.csv` - Individual ensemble model predictions
 
 ### 13. Generate Results Table
 
@@ -390,7 +411,7 @@ Generate a comprehensive results table combining ML predictions, agent ensemble 
 
 ```bash
 conda activate sts
-python generate_results_table.py --input data/predictions/ensemble_predictions_*.csv --output data/results_table.csv
+python generate_results_table.py --input ml/prediction/final_predictions_*.csv --output ml/prediction/results_table_final.csv
 ```
 
 **What it does:**

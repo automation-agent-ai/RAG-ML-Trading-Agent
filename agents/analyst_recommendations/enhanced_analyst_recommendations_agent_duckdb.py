@@ -172,6 +172,7 @@ class EnhancedAnalystRecommendationsAgentDuckDB:
                 recommendation_momentum TEXT DEFAULT 'stable',
                 synthetic_analyst_summary TEXT DEFAULT '',
                 cot_explanation_analyst TEXT DEFAULT '',
+                predicted_outperformance_10d REAL DEFAULT 0.0,
                 -- Metadata
                 extraction_timestamp TIMESTAMP,
                 llm_model TEXT,
@@ -342,14 +343,21 @@ Please extract the following features based on this analyst data:
 3. RECENT_DOWNGRADES (integer): Count of negative rating changes in recent periods  
 4. ANALYST_CONVICTION_SCORE (0.0-1.0): How confident/decisive analysts seem about their recommendations
 5. RECOMMENDATION_MOMENTUM (improving/stable/deteriorating): Trend in analyst sentiment over time
-6. SYNTHETIC_ANALYST_SUMMARY (≤240 chars): Brief summary of analyst sentiment and key themes
-7. COT_EXPLANATION_ANALYST: Your reasoning for the above assessments
+6. PREDICTED_OUTPERFORMANCE_10D (-15.0 to +15.0): Your prediction of 10-day outperformance percentage based on analyst sentiment
+7. SYNTHETIC_ANALYST_SUMMARY (≤240 chars): Brief summary of analyst sentiment and key themes
+8. COT_EXPLANATION_ANALYST: Your reasoning for the above assessments
 
 Focus on:
 - Changes in recommendation patterns over time
 - Strength of analyst conviction vs uncertainty
 - Any emerging themes or consensus shifts
 - How recent the recommendations are
+
+**IMPORTANT:** For PREDICTED_OUTPERFORMANCE_10D, consider:
+- Strong buy consensus with recent upgrades → positive outperformance (+5% to +15%)
+- Hold/sell consensus with downgrades → negative outperformance (-5% to -15%)
+- Mixed or stable ratings → neutral outperformance (-2% to +2%)
+- High conviction scores amplify the prediction magnitude
 
 Return JSON format:
 {{
@@ -358,6 +366,7 @@ Return JSON format:
     "recent_downgrades": 0,
     "analyst_conviction_score": 0.5,
     "recommendation_momentum": "stable",
+    "predicted_outperformance_10d": 0.0,
     "synthetic_analyst_summary": "Brief summary here",
     "cot_explanation_analyst": "Your reasoning here"
 }}
@@ -495,7 +504,7 @@ Return JSON format:
                         prediction['setup_id'] = setup_id
                         prediction['domain'] = 'analyst'
                         prediction['prediction_timestamp'] = datetime.now().isoformat()
-                        logger.info(f"Generated similarity prediction for {setup_id}: {prediction.get('predicted_outperformance', 'N/A')}")
+                        logger.info(f"Generated similarity prediction for {setup_id}: {prediction.get('predicted_outperformance_10d', 'N/A')}")
                         return features, prediction
             
             return features
@@ -528,6 +537,7 @@ Return JSON format:
                 features['recommendation_momentum'],
                 features['synthetic_analyst_summary'],
                 features['cot_explanation_analyst'],
+                features['predicted_outperformance_10d'],
                 features['extraction_timestamp'],
                 features['llm_model']
             )
@@ -539,8 +549,8 @@ Return JSON format:
                     hold_recommendations, avg_price_target, price_target_vs_current, 
                     price_target_spread, coverage_breadth, consensus_rating, recent_upgrades,
                     recent_downgrades, analyst_conviction_score, recommendation_momentum,
-                    synthetic_analyst_summary, cot_explanation_analyst, extraction_timestamp, llm_model
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    synthetic_analyst_summary, cot_explanation_analyst, predicted_outperformance_10d, extraction_timestamp, llm_model
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             '''
             
             conn.execute(insert_query, values)

@@ -473,9 +473,17 @@ Extract these features and return as JSON:
   "consensus_topics": [list of strings from: "earnings", "dividends", "guidance", "macro", "product", "rumor", "other"],
   "controversial_topics": [list of strings from: "earnings", "dividends", "guidance", "macro", "product", "rumor", "other"],
   "sentiment_distribution": {{"bullish": <int>, "bearish": <int>, "neutral": <int>}},
+  "predicted_outperformance_10d": <float between -15.0 and 15.0>,
   "synthetic_post": "<summary in 240 chars or less>",
   "cot_explanation": "<short reasoning for your analysis>"
 }}
+
+**IMPORTANT:** For predicted_outperformance_10d, consider:
+- High community sentiment + bullish posts → positive outperformance
+- Bearish sentiment + contrarian signals → negative outperformance  
+- High engagement on positive rumors → potential positive outperformance
+- Trusted users' sentiment carries more weight in prediction
+- Recent sentiment shifts indicate momentum direction
 
 Return ONLY the JSON object."""
         

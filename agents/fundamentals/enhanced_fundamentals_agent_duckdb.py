@@ -355,13 +355,20 @@ Extract the following features as JSON:
   "avg_headline_spin_financial_results": "<positive|negative|neutral|uncertain>",
   "sentiment_score_financial_results": <overall sentiment -1.0 to 1.0>,
   "profit_warning_present": <true if any profit warnings>,
+  "predicted_outperformance_10d": <float between -15.0 and 15.0>,
   "synthetic_summary_financial_results": "<summary ≤240 chars>",
   "cot_explanation_financial_results": "<brief explanation>",
   "capital_raise_present": <true if capital raising mentioned>,
   "synthetic_summary_corporate_actions": "<capital actions summary ≤240 chars>"
 }}
 
-Focus only on financial performance, earnings, profit warnings, and capital structure changes."""
+Focus on financial performance, earnings, profit warnings, and capital structure changes.
+
+**IMPORTANT:** Based on the financial information provided, predict the 10-day outperformance (predicted_outperformance_10d) as a percentage between -15.0% and +15.0%. Consider:
+- Strong earnings growth → positive outperformance
+- Profit warnings → negative outperformance  
+- Revenue growth and margin improvements → positive outperformance
+- Capital raises and debt issues → negative outperformance"""
         
         try:
             response = self.client.chat.completions.create(

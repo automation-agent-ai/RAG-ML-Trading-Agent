@@ -67,27 +67,32 @@ class AgentPredictionMaker:
     
     def get_domain_predictions(self, setup_ids: List[str], domain: str) -> pd.DataFrame:
         """
-        Get predictions from a specific domain
+        Get predictions from a specific domain with explicit outperformance_10d predictions
         
         Args:
             setup_ids: List of setup IDs
             domain: Domain name ('news', 'fundamentals', 'analyst_recommendations', 'userposts')
             
         Returns:
-            DataFrame with domain predictions
+            DataFrame with domain predictions including outperformance_10d
         """
         conn = None
         try:
             conn = duckdb.connect(self.db_path)
             
-            # Different queries based on domain
+            # Different queries based on domain - enhanced to better predict outperformance_10d
             if domain == 'news':
                 query = """
                     SELECT 
                         setup_id,
                         sentiment_score_financial_results as positive_signal_strength,
                         CASE WHEN profit_warning_present = 'Yes' THEN 1.0 ELSE 0.0 END as negative_risk_score,
-                        sentiment_score_financial_results as weighted_avg_outperformance
+                        -- Explicit outperformance prediction based on news sentiment
+                        CASE 
+                            WHEN sentiment_score_financial_results > 0.6 THEN sentiment_score_financial_results * 10
+                            WHEN sentiment_score_financial_results < -0.3 THEN sentiment_score_financial_results * 8
+                            ELSE sentiment_score_financial_results * 5
+                        END as weighted_avg_outperformance
                     FROM news_features
                     WHERE setup_id = ANY(?)
                 """
@@ -97,7 +102,12 @@ class AgentPredictionMaker:
                         setup_id,
                         COALESCE(roa, 0) + COALESCE(roe, 0) + COALESCE(revenue_growth, 0) as positive_signal_strength,
                         CASE WHEN debt_to_equity > 1.0 THEN debt_to_equity ELSE 0.0 END as negative_risk_score,
-                        sentiment_score_financial_results as weighted_avg_outperformance
+                        -- Explicit outperformance prediction based on financial metrics
+                        (COALESCE(roa, 0) * 2 + COALESCE(roe, 0) * 2 + 
+                         COALESCE(revenue_growth, 0) * 3 - 
+                         COALESCE(debt_to_equity, 0) * 0.5 +
+                         COALESCE(current_ratio, 1) * 0.5 +
+                         COALESCE(gross_margin, 0) * 2) as weighted_avg_outperformance
                     FROM fundamentals_features
                     WHERE setup_id = ANY(?)
                 """
@@ -107,7 +117,10 @@ class AgentPredictionMaker:
                         setup_id,
                         analyst_conviction_score as positive_signal_strength,
                         CASE WHEN recent_downgrades > 0 THEN recent_downgrades ELSE 0.0 END as negative_risk_score,
-                        analyst_conviction_score as weighted_avg_outperformance
+                        -- Explicit outperformance prediction based on analyst recommendations
+                        (analyst_conviction_score * 7.5 - 
+                         COALESCE(recent_downgrades, 0) * 2.5 + 
+                         COALESCE(recent_upgrades, 0) * 2.5) as weighted_avg_outperformance
                     FROM analyst_recommendations_features
                     WHERE setup_id = ANY(?)
                 """
@@ -117,7 +130,10 @@ class AgentPredictionMaker:
                         setup_id,
                         community_sentiment_score as positive_signal_strength,
                         CASE WHEN contrarian_signal > 0 THEN CAST(contrarian_signal AS DOUBLE) ELSE 0.0 END as negative_risk_score,
-                        avg_sentiment as weighted_avg_outperformance
+                        -- Explicit outperformance prediction based on user posts
+                        (avg_sentiment * 4 + 
+                         community_sentiment_score * 3 - 
+                         COALESCE(CAST(contrarian_signal AS DOUBLE), 0) * 2) as weighted_avg_outperformance
                     FROM userposts_features
                     WHERE setup_id = ANY(?)
                 """
@@ -134,9 +150,10 @@ class AgentPredictionMaker:
             # Load thresholds
             neg_threshold, pos_threshold = self.threshold_manager.get_thresholds_for_prediction()
             
-            # Calculate confidence score
+            # Calculate confidence score - enhanced to be more meaningful
             domain_df['confidence_score'] = domain_df.apply(
-                lambda row: max(row['positive_signal_strength'], row['negative_risk_score']),
+                lambda row: min(0.95, max(0.33, 
+                    (abs(row['positive_signal_strength']) + abs(row['negative_risk_score'])) / 2 + 0.3)),
                 axis=1
             )
             
@@ -145,18 +162,28 @@ class AgentPredictionMaker:
                 lambda x: 1 if x >= pos_threshold else (-1 if x <= neg_threshold else 0)
             )
             
+            # Normalize outperformance predictions to realistic range (-15% to +15%)
+            domain_df['weighted_avg_outperformance'] = domain_df['weighted_avg_outperformance'].clip(-15, 15)
+            
             # Select relevant columns
             result_df = domain_df[['setup_id', 'predicted_label', 'weighted_avg_outperformance', 'confidence_score']]
             result_df = result_df.rename(columns={'weighted_avg_outperformance': 'predicted_outperformance'})
             
             logger.info(f"Found {len(result_df)} predictions for domain: {domain}")
             
-            # Log class distribution
+            # Log class distribution and outperformance stats
             if len(result_df) > 0:
                 class_counts = result_df['predicted_label'].value_counts()
                 logger.info(f"Class distribution for domain {domain}:")
                 for cls, count in class_counts.items():
                     logger.info(f"- Class {cls}: {count} ({count/len(result_df):.1%})")
+                
+                # Log outperformance stats
+                logger.info(f"Outperformance stats for domain {domain}:")
+                logger.info(f"- Mean: {result_df['predicted_outperformance'].mean():.2f}%")
+                logger.info(f"- Min: {result_df['predicted_outperformance'].min():.2f}%")
+                logger.info(f"- Max: {result_df['predicted_outperformance'].max():.2f}%")
+                logger.info(f"- Median: {result_df['predicted_outperformance'].median():.2f}%")
             
             return result_df
         
@@ -166,15 +193,15 @@ class AgentPredictionMaker:
     
     def make_ensemble_predictions(self, setup_ids: List[str]) -> pd.DataFrame:
         """
-        Make ensemble predictions across all domains
+        Make ensemble predictions across all domains using confidence-weighted voting
         
         Args:
             setup_ids: List of setup IDs
             
         Returns:
-            DataFrame with ensemble predictions
+            DataFrame with confidence-weighted ensemble predictions
         """
-        logger.info("Making ensemble predictions across all domains")
+        logger.info("🔄 Making confidence-weighted ensemble predictions across all domains")
         
         # Get predictions from each domain
         domains = ['news', 'fundamentals', 'analyst_recommendations', 'userposts']
@@ -182,6 +209,7 @@ class AgentPredictionMaker:
         
         for domain in domains:
             domain_predictions[domain] = self.get_domain_predictions(setup_ids, domain)
+            logger.info(f"✓ Retrieved {len(domain_predictions[domain])} predictions from {domain} domain")
         
         # Create a DataFrame with all setup IDs
         ensemble_df = pd.DataFrame({'setup_id': setup_ids})
@@ -197,72 +225,114 @@ class AgentPredictionMaker:
                 })
                 ensemble_df = pd.merge(ensemble_df, domain_df, on='setup_id', how='left')
         
-        # Calculate ensemble prediction
-        for col in ['predicted_label', 'predicted_outperformance', 'confidence_score']:
-            domain_cols = [f'{domain}_{col}' for domain in domains]
-            valid_cols = [col for col in domain_cols if col in ensemble_df.columns]
+        logger.info(f"✓ Merged predictions from all domains for {len(ensemble_df)} setups")
+        
+        # Calculate ensemble prediction using confidence-weighted voting
+        # 1. Confidence-weighted label prediction
+        ensemble_df['predicted_label'] = None
+        ensemble_df['predicted_outperformance'] = None
+        ensemble_df['confidence_score'] = None
+        
+        # Process each setup individually for better logging
+        for idx, row in ensemble_df.iterrows():
+            setup_id = row['setup_id']
             
-            if not valid_cols:
-                ensemble_df[col] = None
+            # Collect domain predictions and confidences
+            domain_labels = []
+            domain_outperformances = []
+            domain_confidences = []
+            
+            for domain in domains:
+                label_col = f'{domain}_predicted_label'
+                outperformance_col = f'{domain}_predicted_outperformance'
+                confidence_col = f'{domain}_confidence_score'
+                
+                if label_col in row and pd.notna(row[label_col]) and confidence_col in row and pd.notna(row[confidence_col]):
+                    domain_labels.append(row[label_col])
+                    domain_outperformances.append(row[outperformance_col] if pd.notna(row[outperformance_col]) else 0.0)
+                    domain_confidences.append(row[confidence_col])
+            
+            # Skip if no domain predictions
+            if not domain_labels:
                 continue
+                
+            # 1. Confidence-weighted label prediction
+            weighted_sum = sum(label * conf for label, conf in zip(domain_labels, domain_confidences))
+            total_confidence = sum(domain_confidences)
+            weighted_label_value = weighted_sum / total_confidence if total_confidence > 0 else 0
             
-            if col == 'predicted_label':
-                # Weighted voting for label
-                weights = {}
-                for domain in domains:
-                    confidence_col = f'{domain}_confidence_score'
-                    if confidence_col in ensemble_df.columns:
-                        weights[f'{domain}_predicted_label'] = ensemble_df[confidence_col]
-                
-                # Calculate weighted sum for each setup
-                ensemble_df['weighted_sum'] = 0
-                for label_col, weight_col in weights.items():
-                    if label_col in ensemble_df.columns:
-                        ensemble_df['weighted_sum'] += ensemble_df[label_col] * weight_col
-                
-                # Convert weighted sum to label
+            # Convert to discrete class using thresholds
+            neg_threshold, pos_threshold = -0.33, 0.33  # Default thresholds if not using label balancing
+            try:
                 neg_threshold, pos_threshold = self.threshold_manager.get_thresholds_for_prediction()
-                ensemble_df[col] = ensemble_df['weighted_sum'].apply(
-                    lambda x: 1 if x >= pos_threshold else (-1 if x <= neg_threshold else 0)
-                )
-                ensemble_df = ensemble_df.drop(columns=['weighted_sum'])
+            except:
+                logger.warning("Could not load thresholds from threshold manager, using defaults")
             
-            elif col == 'predicted_outperformance':
-                # Weighted average for outperformance
-                weights = {}
-                for domain in domains:
-                    confidence_col = f'{domain}_confidence_score'
-                    if confidence_col in ensemble_df.columns:
-                        weights[f'{domain}_predicted_outperformance'] = ensemble_df[confidence_col]
+            if weighted_label_value >= pos_threshold:
+                ensemble_label = 1
+            elif weighted_label_value <= neg_threshold:
+                ensemble_label = -1
+            else:
+                ensemble_label = 0
                 
-                # Calculate weighted average
-                weighted_sum = 0
-                weight_sum = 0
-                for outperformance_col, weight_col in weights.items():
-                    if outperformance_col in ensemble_df.columns:
-                        weighted_sum += ensemble_df[outperformance_col] * weight_col
-                        weight_sum += weight_col
-                
-                ensemble_df[col] = weighted_sum / weight_sum.replace(0, 1)
+            # 2. Confidence-weighted outperformance prediction
+            weighted_outperformance = sum(outperf * conf for outperf, conf in zip(domain_outperformances, domain_confidences))
+            weighted_outperformance = weighted_outperformance / total_confidence if total_confidence > 0 else 0
             
-            elif col == 'confidence_score':
-                # Maximum confidence across domains
-                ensemble_df[col] = ensemble_df[valid_cols].max(axis=1)
+            # 3. Calculate ensemble confidence
+            # Higher when domains agree, lower when they disagree
+            domain_agreement = 1.0
+            if len(domain_labels) > 1:
+                # Calculate standard deviation of predictions (normalized)
+                label_std = np.std(domain_labels) / 2  # Max std for [-1,0,1] is 1
+                domain_agreement = max(0.5, 1.0 - label_std)
+            
+            # Final confidence is a combination of average domain confidence and agreement
+            ensemble_confidence = (sum(domain_confidences) / len(domain_confidences)) * domain_agreement
+            
+            # Store results
+            ensemble_df.at[idx, 'predicted_label'] = ensemble_label
+            ensemble_df.at[idx, 'predicted_outperformance'] = weighted_outperformance
+            ensemble_df.at[idx, 'confidence_score'] = ensemble_confidence
         
         # Count domains with predictions
         domain_count_cols = [f'{domain}_predicted_label' for domain in domains]
         ensemble_df['domains_count'] = ensemble_df[domain_count_cols].notna().sum(axis=1)
         
         # Log ensemble prediction stats
-        logger.info(f"Made ensemble predictions for {len(ensemble_df)} setups")
+        logger.info(f"✅ Generated confidence-weighted ensemble predictions for {len(ensemble_df)} setups")
         
         # Log class distribution
         if len(ensemble_df) > 0:
             class_counts = ensemble_df['predicted_label'].value_counts()
-            logger.info("Class distribution for ensemble predictions:")
+            logger.info("📊 Class distribution for ensemble predictions:")
             for cls, count in class_counts.items():
                 if pd.notna(cls):
-                    logger.info(f"- Class {cls}: {count} ({count/len(ensemble_df):.1%})")
+                    logger.info(f"  - Class {cls}: {count} ({count/len(ensemble_df):.1%})")
+            
+            # Log outperformance stats
+            valid_outperformance = ensemble_df['predicted_outperformance'].dropna()
+            if len(valid_outperformance) > 0:
+                logger.info("📈 Outperformance prediction stats:")
+                logger.info(f"  - Mean: {valid_outperformance.mean():.2f}%")
+                logger.info(f"  - Min: {valid_outperformance.min():.2f}%")
+                logger.info(f"  - Max: {valid_outperformance.max():.2f}%")
+                logger.info(f"  - Median: {valid_outperformance.median():.2f}%")
+            
+            # Log confidence stats
+            valid_confidence = ensemble_df['confidence_score'].dropna()
+            if len(valid_confidence) > 0:
+                logger.info("🎯 Confidence score stats:")
+                logger.info(f"  - Mean: {valid_confidence.mean():.2f}")
+                logger.info(f"  - Min: {valid_confidence.min():.2f}")
+                logger.info(f"  - Max: {valid_confidence.max():.2f}")
+                logger.info(f"  - Median: {valid_confidence.median():.2f}")
+            
+            # Log domain count stats
+            logger.info("🔄 Domain contribution stats:")
+            domain_counts = ensemble_df['domains_count'].value_counts().sort_index()
+            for count, occurrences in domain_counts.items():
+                logger.info(f"  - {count} domains: {occurrences} setups ({occurrences/len(ensemble_df):.1%})")
         
         return ensemble_df
     

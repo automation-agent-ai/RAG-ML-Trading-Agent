@@ -567,112 +567,19 @@ class ThreeStageMLPipeline:
         # Verify labels are consistent
         if not np.array_equal(y_text, y_financial):
             logger.warning("Labels differ between text and financial data, using text labels")
-            
-        # Split data for ensemble training
-        X_train_indices, X_test_indices, y_train, y_test = train_test_split(
-            range(len(common_ids)), y_text, test_size=0.2, 
-            random_state=self.random_state, stratify=y_text
+        
+        logger.info("🔄 Generating ensemble features using nested CV to prevent data leakage...")
+        
+        # Use nested cross-validation to generate prediction features without leakage
+        ensemble_X_full, y_full = self._generate_ensemble_features_no_leakage(X_text, X_financial, y_text)
+        
+        # Split ensemble data for training
+        X_train, X_test, y_train, y_test = train_test_split(
+            ensemble_X_full, y_full, test_size=0.2, 
+            random_state=self.random_state, stratify=y_full
         )
         
-        # Get prediction vectors for common setup IDs
-        text_pred_train = pd.DataFrame(index=X_train_indices)
-        text_pred_test = pd.DataFrame(index=X_test_indices)
-        financial_pred_train = pd.DataFrame(index=X_train_indices)
-        financial_pred_test = pd.DataFrame(index=X_test_indices)
-        
-        # Generate prediction vectors using trained models
-        for model_name, model in text_stage_results['models'].items():
-            # Predict on common data
-            X_text_train = X_text.iloc[X_train_indices]
-            X_text_test = X_text.iloc[X_test_indices]
-            
-            y_proba_train = model.predict_proba(X_text_train)
-            y_proba_test = model.predict_proba(X_text_test)
-            
-            for i, class_label in enumerate([0, 1, 2]):
-                text_pred_train[f'text_{model_name}_prob_{class_label}'] = y_proba_train[:, i]
-                text_pred_test[f'text_{model_name}_prob_{class_label}'] = y_proba_test[:, i]
-                
-        for model_name, model in financial_stage_results['models'].items():
-            # Predict on common data
-            X_financial_train = X_financial.iloc[X_train_indices]
-            X_financial_test = X_financial.iloc[X_test_indices]
-            
-            y_proba_train = model.predict_proba(X_financial_train)
-            y_proba_test = model.predict_proba(X_financial_test)
-            
-            for i, class_label in enumerate([0, 1, 2]):
-                financial_pred_train[f'financial_{model_name}_prob_{class_label}'] = y_proba_train[:, i]
-                financial_pred_test[f'financial_{model_name}_prob_{class_label}'] = y_proba_test[:, i]
-        
-        # Get predictions for correlation analysis
-        best_text_model = max(text_stage_results['results'].items(), key=lambda x: x[1]['accuracy'])[0]
-        best_financial_model = max(financial_stage_results['results'].items(), key=lambda x: x[1]['accuracy'])[0]
-        
-        text_preds = text_stage_results['models'][best_text_model].predict(X_text_test)
-        text_probs = text_stage_results['models'][best_text_model].predict_proba(X_text_test)
-        fund_preds = financial_stage_results['models'][best_financial_model].predict(X_financial_test)
-        fund_probs = financial_stage_results['models'][best_financial_model].predict_proba(X_financial_test)
-        
-        # Analyze prediction correlation
-        correlation_results = self.analyze_prediction_correlation(text_preds, fund_preds, text_probs, fund_probs)
-        
-        # Combine prediction vectors from both domains
-        ensemble_X_train = pd.concat([text_pred_train, financial_pred_train], axis=1)
-        ensemble_X_test = pd.concat([text_pred_test, financial_pred_test], axis=1)
-        
-        # Add richer ensemble features
-        # Calculate confidence measures (max probability)
-        for model_name in self.model_configs.keys():
-            if f'text_{model_name}_prob_0' in ensemble_X_train:
-                # Text model confidence
-                ensemble_X_train[f'text_{model_name}_confidence'] = ensemble_X_train[[
-                    f'text_{model_name}_prob_0', 
-                    f'text_{model_name}_prob_1', 
-                    f'text_{model_name}_prob_2'
-                ]].max(axis=1)
-                
-                ensemble_X_test[f'text_{model_name}_confidence'] = ensemble_X_test[[
-                    f'text_{model_name}_prob_0', 
-                    f'text_{model_name}_prob_1', 
-                    f'text_{model_name}_prob_2'
-                ]].max(axis=1)
-                
-                # Financial model confidence
-                ensemble_X_train[f'financial_{model_name}_confidence'] = ensemble_X_train[[
-                    f'financial_{model_name}_prob_0', 
-                    f'financial_{model_name}_prob_1', 
-                    f'financial_{model_name}_prob_2'
-                ]].max(axis=1)
-                
-                ensemble_X_test[f'financial_{model_name}_confidence'] = ensemble_X_test[[
-                    f'financial_{model_name}_prob_0', 
-                    f'financial_{model_name}_prob_1', 
-                    f'financial_{model_name}_prob_2'
-                ]].max(axis=1)
-                
-                # Confidence difference
-                ensemble_X_train[f'{model_name}_confidence_diff'] = np.abs(
-                    ensemble_X_train[f'text_{model_name}_confidence'] - 
-                    ensemble_X_train[f'financial_{model_name}_confidence']
-                )
-                
-                ensemble_X_test[f'{model_name}_confidence_diff'] = np.abs(
-                    ensemble_X_test[f'text_{model_name}_confidence'] - 
-                    ensemble_X_test[f'financial_{model_name}_confidence']
-                )
-                
-                # Add agreement measures (same as in prediction pipeline)
-                for i in range(3):  # For each class (0, 1, 2)
-                    text_prob_train = ensemble_X_train[f'text_{model_name}_prob_{i}']
-                    fund_prob_train = ensemble_X_train[f'financial_{model_name}_prob_{i}']
-                    ensemble_X_train[f'{model_name}_class{i}_agreement'] = 1 - np.abs(text_prob_train - fund_prob_train)
-                    
-                    text_prob_test = ensemble_X_test[f'text_{model_name}_prob_{i}']
-                    fund_prob_test = ensemble_X_test[f'financial_{model_name}_prob_{i}']
-                    ensemble_X_test[f'{model_name}_class{i}_agreement'] = 1 - np.abs(text_prob_test - fund_prob_test)
-        
-        logger.info(f"Ensemble feature shape: {ensemble_X_train.shape} features")
+        logger.info(f"Ensemble feature shape (no leakage): {X_train.shape} features")
         
         # Train ensemble meta-models
         ensemble_models = {}
@@ -688,21 +595,21 @@ class ThreeStageMLPipeline:
             ])
             
             # Perform detailed cross-validation
-            cv_results = self.perform_detailed_cross_validation(pipeline, ensemble_X_train, y_train, model_name, 'ensemble')
+            cv_results = self.perform_detailed_cross_validation(pipeline, X_train, y_train, model_name, 'ensemble')
             
             # Train ensemble model on full training set
-            pipeline.fit(ensemble_X_train, y_train)
+            pipeline.fit(X_train, y_train)
             
             # Predictions
-            y_pred_test = pipeline.predict(ensemble_X_test)
-            y_proba_test = pipeline.predict_proba(ensemble_X_test)
+            y_pred_test = pipeline.predict(X_test)
+            y_proba_test = pipeline.predict_proba(X_test)
             
             # Comprehensive evaluation
-            eval_results = self.evaluate_model(pipeline, ensemble_X_test, y_test, model_name)
+            eval_results = self.evaluate_model(pipeline, X_test, y_test, model_name)
             
             # Generate individual model visualizations
-            feature_names = list(ensemble_X_train.columns)
-            self.generate_individual_model_visualizations(pipeline, ensemble_X_test, y_test, model_name, 'ensemble', feature_names)
+            feature_names = list(X_train.columns)
+            self.generate_individual_model_visualizations(pipeline, X_test, y_test, model_name, 'ensemble', feature_names)
             
             # Log results
             logger.info(f"    ✅ Accuracy: {eval_results['accuracy']:.4f}, Precision: {eval_results['precision_macro']:.4f}")
@@ -730,23 +637,121 @@ class ThreeStageMLPipeline:
         ensemble_data_path = self.ensemble_model_dir / "ensemble_data.pkl"
         with open(ensemble_data_path, 'wb') as f:
             pickle.dump({
-                'X_train': ensemble_X_train,
-                'X_test': ensemble_X_test,
+                'X_train': X_train,
+                'X_test': X_test,
                 'y_train': y_train,
                 'y_test': y_test,
                 'common_ids': common_ids,
-                'feature_names': list(ensemble_X_train.columns)
+                'feature_names': list(X_train.columns)
             }, f)
         
         return {
             'models': ensemble_models,
             'results': ensemble_results,
-            'X_train': ensemble_X_train,
-            'X_test': ensemble_X_test,
+            'X_train': X_train,
+            'X_test': X_test,
             'y_train': y_train,
             'y_test': y_test,
             'common_ids': common_ids
         }
+        
+    def _generate_ensemble_features_no_leakage(self, X_text: pd.DataFrame, X_financial: pd.DataFrame, y: np.ndarray) -> Tuple[pd.DataFrame, np.ndarray]:
+        """Generate ensemble features using nested CV to prevent data leakage"""
+        logger.info("  🔄 Using nested CV to generate prediction features without leakage...")
+        
+        # Initialize arrays to store out-of-fold predictions
+        n_samples = len(y)
+        ensemble_features = pd.DataFrame(index=range(n_samples))
+        
+        # Use 5-fold CV to generate out-of-fold predictions
+        cv_splitter = StratifiedKFold(n_splits=5, shuffle=True, random_state=self.random_state)
+        
+        for fold, (train_idx, val_idx) in enumerate(cv_splitter.split(X_text, y)):
+            logger.info(f"    📊 Processing fold {fold + 1}/5 for ensemble features...")
+            
+            # Split data for this fold
+            X_text_train, X_text_val = X_text.iloc[train_idx], X_text.iloc[val_idx]
+            X_financial_train, X_financial_val = X_financial.iloc[train_idx], X_financial.iloc[val_idx]
+            y_train_fold, y_val_fold = y[train_idx], y[val_idx]
+            
+            # Train text models on this fold
+            text_models_fold = {}
+            for model_name, model_config in self.model_configs.items():
+                pipeline = Pipeline([
+                    ('imputer', SimpleImputer(strategy='median', missing_values=np.nan)),
+                    ('scaler', StandardScaler()),
+                    ('classifier', clone(model_config))
+                ])
+                pipeline.fit(X_text_train, y_train_fold)
+                text_models_fold[model_name] = pipeline
+            
+            # Train financial models on this fold
+            financial_models_fold = {}
+            for model_name, model_config in self.model_configs.items():
+                pipeline = Pipeline([
+                    ('imputer', SimpleImputer(strategy='median', missing_values=np.nan)),
+                    ('scaler', StandardScaler()),
+                    ('classifier', clone(model_config))
+                ])
+                pipeline.fit(X_financial_train, y_train_fold)
+                financial_models_fold[model_name] = pipeline
+            
+            # Generate predictions for validation set (out-of-fold)
+            for model_name in self.model_configs.keys():
+                # Text model predictions
+                text_proba = text_models_fold[model_name].predict_proba(X_text_val)
+                for i, class_label in enumerate([0, 1, 2]):
+                    col_name = f'text_{model_name}_prob_{class_label}'
+                    if col_name not in ensemble_features.columns:
+                        ensemble_features[col_name] = np.nan
+                    ensemble_features.loc[val_idx, col_name] = text_proba[:, i]
+                
+                # Financial model predictions
+                financial_proba = financial_models_fold[model_name].predict_proba(X_financial_val)
+                for i, class_label in enumerate([0, 1, 2]):
+                    col_name = f'financial_{model_name}_prob_{class_label}'
+                    if col_name not in ensemble_features.columns:
+                        ensemble_features[col_name] = np.nan
+                    ensemble_features.loc[val_idx, col_name] = financial_proba[:, i]
+        
+        # Add derived ensemble features (confidence, agreement measures)
+        for model_name in self.model_configs.keys():
+            if f'text_{model_name}_prob_0' in ensemble_features.columns:
+                # Text model confidence
+                ensemble_features[f'text_{model_name}_confidence'] = ensemble_features[[
+                    f'text_{model_name}_prob_0', 
+                    f'text_{model_name}_prob_1', 
+                    f'text_{model_name}_prob_2'
+                ]].max(axis=1)
+                
+                # Financial model confidence
+                ensemble_features[f'financial_{model_name}_confidence'] = ensemble_features[[
+                    f'financial_{model_name}_prob_0', 
+                    f'financial_{model_name}_prob_1', 
+                    f'financial_{model_name}_prob_2'
+                ]].max(axis=1)
+                
+                # Confidence difference
+                ensemble_features[f'{model_name}_confidence_diff'] = np.abs(
+                    ensemble_features[f'text_{model_name}_confidence'] - 
+                    ensemble_features[f'financial_{model_name}_confidence']
+                )
+                
+                # Add agreement measures
+                for i in range(3):  # For each class (0, 1, 2)
+                    text_prob = ensemble_features[f'text_{model_name}_prob_{i}']
+                    financial_prob = ensemble_features[f'financial_{model_name}_prob_{i}']
+                    ensemble_features[f'{model_name}_class{i}_agreement'] = 1 - np.abs(text_prob - financial_prob)
+        
+        # Remove any rows with NaN values (shouldn't happen but safety check)
+        valid_mask = ~ensemble_features.isnull().any(axis=1)
+        ensemble_features_clean = ensemble_features[valid_mask]
+        y_clean = y[valid_mask]
+        
+        logger.info(f"  ✅ Generated {ensemble_features_clean.shape[0]} samples with {ensemble_features_clean.shape[1]} ensemble features")
+        logger.info(f"  🔍 No data leakage: Each prediction is out-of-fold")
+        
+        return ensemble_features_clean, y_clean
         
     def evaluate_model(self, model, X_test, y_test, model_name):
         """Comprehensive model evaluation with class-specific metrics"""

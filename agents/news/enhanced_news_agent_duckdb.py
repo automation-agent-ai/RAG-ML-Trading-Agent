@@ -1012,6 +1012,7 @@ class EnhancedNewsAgentDuckDB:
                 'avg_headline_spin': 'Average headline sentiment (positive/negative/neutral/uncertain)',
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'profit_warning_present': 'Whether any profit warning is present (true/false)',
+                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of financial results news (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             },
@@ -1020,6 +1021,7 @@ class EnhancedNewsAgentDuckDB:
                 'avg_headline_spin': 'Average headline sentiment (positive/negative/neutral/uncertain)',
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'capital_raise_present': 'Whether capital raising activity is present (true/false)',
+                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of corporate actions (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             },
@@ -1028,6 +1030,7 @@ class EnhancedNewsAgentDuckDB:
                 'avg_headline_spin': 'Average headline sentiment (positive/negative/neutral/uncertain)',
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'board_change_present': 'Whether board changes are present (true/false)',
+                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of governance news (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             },
@@ -1037,6 +1040,7 @@ class EnhancedNewsAgentDuckDB:
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'contract_award_present': 'Whether contract awards are present (true/false)',
                 'merger_or_acquisition_present': 'Whether M&A activity is present (true/false)',
+                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of corporate events (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             },
@@ -1046,6 +1050,7 @@ class EnhancedNewsAgentDuckDB:
                 'sentiment_score': 'Overall sentiment score (-1.0 to +1.0)',
                 'broker_recommendation_present': 'Whether broker recommendations are present (true/false)',
                 'credit_rating_change_present': 'Whether credit rating changes are present (true/false)',
+                'predicted_outperformance_10d': '10-day outperformance prediction (-15.0 to +15.0)',
                 'synthetic_summary': 'Brief summary of other market signals (≤240 chars)',
                 'cot_explanation': 'Reasoning for analysis'
             }
@@ -1057,6 +1062,8 @@ class EnhancedNewsAgentDuckDB:
         json_template = "{\n"
         for feature, description in features.items():
             if feature in ['max_severity', 'sentiment_score']:
+                json_template += f'  "{feature}": 0.0,  // {description}\n'
+            elif feature == 'predicted_outperformance_10d':
                 json_template += f'  "{feature}": 0.0,  // {description}\n'
             elif feature == 'avg_headline_spin':
                 json_template += f'  "{feature}": "neutral",  // {description}\n'
@@ -1073,6 +1080,7 @@ class EnhancedNewsAgentDuckDB:
 - Extract features as specified in the JSON template
 - For categorical fields, use ONLY the specified allowed values
 - Synthetic summary must be ≤240 characters
+- **IMPORTANT:** Predict 10-day outperformance (-15.0% to +15.0%) based on news impact
 - Return ONLY valid JSON, no extra text
 
 **JSON Template:**
@@ -1080,6 +1088,12 @@ class EnhancedNewsAgentDuckDB:
 
 **News Items to Analyze:**
 {context}
+
+**Outperformance Prediction Guidance:**
+- Positive earnings surprises, good guidance → positive outperformance
+- Profit warnings, missed expectations → negative outperformance
+- M&A target, contracts → positive outperformance
+- Credit downgrades, board issues → negative outperformance
 
 Extract the features as JSON:"""
 

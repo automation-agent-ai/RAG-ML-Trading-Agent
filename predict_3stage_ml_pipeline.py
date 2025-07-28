@@ -1,208 +1,414 @@
 #!/usr/bin/env python3
 """
-3-Stage ML Pipeline Prediction Script
+3-Stage ML Prediction Pipeline with Confidence-Weighted Ensemble
 
-Makes predictions using the trained 3-stage ML pipeline:
-1. Apply text models to text features
-2. Apply financial models to financial features  
-3. Apply ensemble meta-models to prediction vectors
+Stage 1: Text ML predictions (Random Forest, XGBoost, LightGBM, Logistic Regression)
+Stage 2: Financial ML predictions (Random Forest, XGBoost, LightGBM, Logistic Regression)  
+Stage 3: Ensemble ML predictions using confidence-weighted voting
 
 Usage:
-    python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --models-dir models_3stage --output-dir data/predictions
+    python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models --output-dir data/predictions
 """
 
 import os
 import sys
 import argparse
 import logging
+import warnings
 import numpy as np
 import pandas as pd
 import pickle
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Tuple
-import warnings
 
-# Suppress specific warnings
+# Suppress LightGBM warnings
 warnings.filterwarnings("ignore", category=UserWarning, message="X does not have valid feature names")
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
-logger = logging.getLogger(__name__)
 
 from corrected_csv_feature_loader import CorrectedCSVFeatureLoader
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 class ThreeStageMLPredictor:
-    """3-Stage ML Pipeline Predictor"""
+    """3-Stage ML Predictor with Confidence-Weighted Ensemble"""
     
-    def __init__(self, models_dir: str, input_dir: str = "data/ml_features/balanced"):
-        self.models_dir = Path(models_dir)
-        self.input_dir = input_dir
-        self.feature_loader = CorrectedCSVFeatureLoader(input_dir)
+    def __init__(self, model_dir: str = "models", output_dir: str = "data/predictions"):
+        self.model_dir = Path(model_dir)
+        self.output_dir = Path(output_dir)
         
-        # Define model names
+        # Create prediction output directories
+        self.text_pred_dir = self.output_dir / "text_ml"
+        self.financial_pred_dir = self.output_dir / "financial_ml"
+        self.ensemble_pred_dir = self.output_dir / "ensemble"
+        
+        for dir_path in [self.text_pred_dir, self.financial_pred_dir, self.ensemble_pred_dir]:
+            dir_path.mkdir(parents=True, exist_ok=True)
+            
+        # Initialize feature loader
+        self.feature_loader = CorrectedCSVFeatureLoader()
+        
+        # Model names
         self.model_names = ['random_forest', 'logistic_regression', 'xgboost', 'lightgbm']
         
-        # Storage for loaded models
+        # Load models
         self.text_models = {}
         self.financial_models = {}
         self.ensemble_models = {}
         
+        self.load_all_models()
+        
     def load_all_models(self):
-        """Load all trained models from the 3-stage pipeline"""
-        logger.info("Loading all trained models...")
+        """Load all trained models"""
+        logger.info("📂 Loading trained models...")
         
         # Load text models
-        text_dir = self.models_dir / "text"
         for model_name in self.model_names:
-            model_path = text_dir / f"text_{model_name}.pkl"
+            model_path = self.model_dir / "text" / f"text_{model_name}.pkl"
             if model_path.exists():
                 with open(model_path, 'rb') as f:
                     self.text_models[model_name] = pickle.load(f)
-                logger.info(f"  ✅ Loaded text model: {model_name}")
+                logger.info(f"  ✅ Loaded text {model_name}")
             else:
-                logger.warning(f"  ⚠️ Text model not found: {model_path}")
-        
+                logger.warning(f"  ⚠️ Text {model_name} model not found at {model_path}")
+                
         # Load financial models
-        financial_dir = self.models_dir / "financial"
         for model_name in self.model_names:
-            model_path = financial_dir / f"financial_{model_name}.pkl"
+            model_path = self.model_dir / "financial" / f"financial_{model_name}.pkl"
             if model_path.exists():
                 with open(model_path, 'rb') as f:
                     self.financial_models[model_name] = pickle.load(f)
-                logger.info(f"  ✅ Loaded financial model: {model_name}")
+                logger.info(f"  ✅ Loaded financial {model_name}")
             else:
-                logger.warning(f"  ⚠️ Financial model not found: {model_path}")
-        
+                logger.warning(f"  ⚠️ Financial {model_name} model not found at {model_path}")
+                
         # Load ensemble models
-        ensemble_dir = self.models_dir / "ensemble"
         for model_name in self.model_names:
-            model_path = ensemble_dir / f"ensemble_{model_name}.pkl"
+            model_path = self.model_dir / "ensemble" / f"ensemble_{model_name}.pkl"
             if model_path.exists():
                 with open(model_path, 'rb') as f:
                     self.ensemble_models[model_name] = pickle.load(f)
-                logger.info(f"  ✅ Loaded ensemble model: {model_name}")
+                logger.info(f"  ✅ Loaded ensemble {model_name}")
             else:
-                logger.warning(f"  ⚠️ Ensemble model not found: {model_path}")
+                logger.warning(f"  ⚠️ Ensemble {model_name} model not found at {model_path}")
+                
+        logger.info(f"📊 Loaded {len(self.text_models)} text, {len(self.financial_models)} financial, {len(self.ensemble_models)} ensemble models")
         
-        logger.info(f"Loaded {len(self.text_models)} text, {len(self.financial_models)} financial, {len(self.ensemble_models)} ensemble models")
-        
-    def predict_stage1_text(self, X_text: pd.DataFrame) -> Dict[str, np.ndarray]:
-        """Stage 1: Make predictions using text models"""
+    def predict_stage1_text(self, X_text: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        """Stage 1: Make text-based ML predictions"""
         logger.info("🔤 Stage 1: Making text-based predictions...")
         
         text_predictions = {}
+        individual_results = {}
         
         for model_name, model in self.text_models.items():
+            logger.info(f"  🎯 Predicting with text {model_name}")
+            
             # Get predictions and probabilities
             predictions = model.predict(X_text)
             probabilities = model.predict_proba(X_text)
             
-            text_predictions[f'text_{model_name}_pred'] = predictions
-            text_predictions[f'text_{model_name}_prob_0'] = probabilities[:, 0]
-            text_predictions[f'text_{model_name}_prob_1'] = probabilities[:, 1]
-            text_predictions[f'text_{model_name}_prob_2'] = probabilities[:, 2]
+            # Convert back to -1, 0, 1 format
+            predictions_converted = predictions - 1  # 0,1,2 -> -1,0,1
             
-            logger.info(f"  ✅ Text {model_name}: {len(predictions)} predictions")
+            # Calculate confidence (max probability)
+            confidences = np.max(probabilities, axis=1)
+            
+            # Store predictions
+            text_predictions[f'text_{model_name}_pred'] = predictions_converted
+            text_predictions[f'text_{model_name}_confidence'] = confidences
+            text_predictions[f'text_{model_name}_prob_0'] = probabilities[:, 0]  # Negative
+            text_predictions[f'text_{model_name}_prob_1'] = probabilities[:, 1]  # Neutral
+            text_predictions[f'text_{model_name}_prob_2'] = probabilities[:, 2]  # Positive
+            
+            # Individual model results
+            individual_results[model_name] = pd.DataFrame({
+                'prediction': predictions_converted,
+                'confidence': confidences,
+                'prob_negative': probabilities[:, 0],
+                'prob_neutral': probabilities[:, 1],
+                'prob_positive': probabilities[:, 2]
+            }, index=X_text.index)
+            
+            # Save individual model results
+            output_file = self.text_pred_dir / f"text_{model_name}_predictions.csv"
+            individual_results[model_name].to_csv(output_file)
+            logger.info(f"    💾 Saved to {output_file}")
         
-        return text_predictions
+        return text_predictions, individual_results
         
-    def predict_stage2_financial(self, X_financial: pd.DataFrame) -> Dict[str, np.ndarray]:
-        """Stage 2: Make predictions using financial models"""
+    def predict_stage2_financial(self, X_financial: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        """Stage 2: Make financial-based ML predictions"""
         logger.info("💰 Stage 2: Making financial-based predictions...")
         
         financial_predictions = {}
+        individual_results = {}
         
         for model_name, model in self.financial_models.items():
+            logger.info(f"  🎯 Predicting with financial {model_name}")
+            
             # Get predictions and probabilities
             predictions = model.predict(X_financial)
             probabilities = model.predict_proba(X_financial)
             
-            financial_predictions[f'financial_{model_name}_pred'] = predictions
-            financial_predictions[f'financial_{model_name}_prob_0'] = probabilities[:, 0]
-            financial_predictions[f'financial_{model_name}_prob_1'] = probabilities[:, 1]
-            financial_predictions[f'financial_{model_name}_prob_2'] = probabilities[:, 2]
+            # Convert back to -1, 0, 1 format
+            predictions_converted = predictions - 1  # 0,1,2 -> -1,0,1
             
-            logger.info(f"  ✅ Financial {model_name}: {len(predictions)} predictions")
+            # Calculate confidence (max probability)
+            confidences = np.max(probabilities, axis=1)
+            
+            # Store predictions
+            financial_predictions[f'financial_{model_name}_pred'] = predictions_converted
+            financial_predictions[f'financial_{model_name}_confidence'] = confidences
+            financial_predictions[f'financial_{model_name}_prob_0'] = probabilities[:, 0]  # Negative
+            financial_predictions[f'financial_{model_name}_prob_1'] = probabilities[:, 1]  # Neutral
+            financial_predictions[f'financial_{model_name}_prob_2'] = probabilities[:, 2]  # Positive
+            
+            # Individual model results
+            individual_results[model_name] = pd.DataFrame({
+                'prediction': predictions_converted,
+                'confidence': confidences,
+                'prob_negative': probabilities[:, 0],
+                'prob_neutral': probabilities[:, 1],
+                'prob_positive': probabilities[:, 2]
+            }, index=X_financial.index)
+            
+            # Save individual model results
+            output_file = self.financial_pred_dir / f"financial_{model_name}_predictions.csv"
+            individual_results[model_name].to_csv(output_file)
+            logger.info(f"    💾 Saved to {output_file}")
         
-        return financial_predictions
+        return financial_predictions, individual_results
         
-    def predict_stage3_ensemble(self, ensemble_features: pd.DataFrame) -> Dict[str, np.ndarray]:
-        """Stage 3: Make predictions using ensemble meta-models"""
-        logger.info("🏆 Stage 3: Making ensemble meta-predictions...")
+    def create_ensemble_features(self, text_predictions: Dict, financial_predictions: Dict, setup_ids: List[str]) -> pd.DataFrame:
+        """Create ensemble features from text and financial predictions"""
+        logger.info("🔗 Creating ensemble features...")
+        
+        # Load the training feature order to ensure exact match
+        try:
+            with open(self.model_dir / "ensemble" / "ensemble_data.pkl", 'rb') as f:
+                training_data = pickle.load(f)
+                training_feature_names = training_data['feature_names']
+            logger.info(f"Loaded training feature order: {len(training_feature_names)} features")
+        except:
+            logger.warning("Could not load training feature order, using default order")
+            training_feature_names = None
+        
+        # Create ensemble features in the exact same order as training
+        ensemble_features = pd.DataFrame(index=range(len(setup_ids)))
+        
+        if training_feature_names:
+            # Use exact training order
+            for feature_name in training_feature_names:
+                if feature_name in text_predictions:
+                    ensemble_features[feature_name] = text_predictions[feature_name]
+                elif feature_name in financial_predictions:
+                    ensemble_features[feature_name] = financial_predictions[feature_name]
+                else:
+                    # This is a derived feature - calculate it
+                    ensemble_features[feature_name] = self._calculate_derived_feature(
+                        feature_name, ensemble_features, text_predictions, financial_predictions
+                    )
+        else:
+            # Fallback: create features in expected order
+            # Based on training pattern: text_prob, financial_prob for each model, then derived features
+            for model_name in self.model_names:
+                # Add probability features
+                for class_idx in [0, 1, 2]:
+                    # Text probabilities first
+                    text_prob_key = f'text_{model_name}_prob_{class_idx}'
+                    if text_prob_key in text_predictions:
+                        ensemble_features[text_prob_key] = text_predictions[text_prob_key]
+                    
+                    # Then financial probabilities
+                    financial_prob_key = f'financial_{model_name}_prob_{class_idx}'
+                    if financial_prob_key in financial_predictions:
+                        ensemble_features[financial_prob_key] = financial_predictions[financial_prob_key]
+            
+            # Add confidence features
+            for model_name in self.model_names:
+                text_conf_key = f'text_{model_name}_confidence'
+                if text_conf_key in text_predictions:
+                    ensemble_features[text_conf_key] = text_predictions[text_conf_key]
+                
+                financial_conf_key = f'financial_{model_name}_confidence'
+                if financial_conf_key in financial_predictions:
+                    ensemble_features[financial_conf_key] = financial_predictions[financial_conf_key]
+            
+            # Add derived features
+            for model_name in self.model_names:
+                text_conf_key = f'text_{model_name}_confidence'
+                financial_conf_key = f'financial_{model_name}_confidence'
+                
+                if text_conf_key in ensemble_features.columns and financial_conf_key in ensemble_features.columns:
+                    # Confidence difference
+                    ensemble_features[f'{model_name}_confidence_diff'] = np.abs(
+                        ensemble_features[text_conf_key] - 
+                        ensemble_features[financial_conf_key]
+                    )
+                    
+                    # Add agreement measures
+                    for i in range(3):  # For each class (0, 1, 2)
+                        text_prob_key = f'text_{model_name}_prob_{i}'
+                        financial_prob_key = f'financial_{model_name}_prob_{i}'
+                        
+                        if text_prob_key in ensemble_features.columns and financial_prob_key in ensemble_features.columns:
+                            text_prob = ensemble_features[text_prob_key]
+                            financial_prob = ensemble_features[financial_prob_key]
+                            ensemble_features[f'{model_name}_class{i}_agreement'] = 1 - np.abs(text_prob - financial_prob)
+        
+        logger.info(f"Created ensemble features shape: {ensemble_features.shape}")
+        logger.info(f"Feature order matches training: {training_feature_names is not None}")
+        return ensemble_features
+        
+    def _calculate_derived_feature(self, feature_name: str, ensemble_features: pd.DataFrame, 
+                                 text_predictions: Dict, financial_predictions: Dict) -> pd.Series:
+        """Calculate derived features (confidence differences, agreements)"""
+        
+        # Extract model name from feature name
+        parts = feature_name.split('_')
+        
+        if 'confidence_diff' in feature_name:
+            # Extract model name (everything before '_confidence_diff')
+            model_name = feature_name.replace('_confidence_diff', '')
+            text_conf_key = f'text_{model_name}_confidence'
+            financial_conf_key = f'financial_{model_name}_confidence'
+            
+            if text_conf_key in text_predictions and financial_conf_key in financial_predictions:
+                return np.abs(text_predictions[text_conf_key] - financial_predictions[financial_conf_key])
+        
+        elif 'agreement' in feature_name:
+            # Extract model name and class (e.g., 'random_forest_class0_agreement')
+            parts = feature_name.split('_')
+            class_idx = int(parts[-2][-1])  # Extract the number from 'class0', 'class1', etc.
+            model_name = '_'.join(parts[:-2])  # Everything before '_classX_agreement'
+            
+            text_prob_key = f'text_{model_name}_prob_{class_idx}'
+            financial_prob_key = f'financial_{model_name}_prob_{class_idx}'
+            
+            if text_prob_key in text_predictions and financial_prob_key in financial_predictions:
+                return 1 - np.abs(text_predictions[text_prob_key] - financial_predictions[financial_prob_key])
+        
+        # Default: return zeros if we can't calculate
+        return pd.Series(np.zeros(len(ensemble_features)), index=ensemble_features.index)
+        
+    def predict_stage3_ensemble(self, ensemble_features: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        """Stage 3: Make ensemble predictions with confidence weighting"""
+        logger.info("🏆 Stage 3: Making ensemble predictions...")
         
         ensemble_predictions = {}
+        individual_results = {}
         
         for model_name, model in self.ensemble_models.items():
+            logger.info(f"  🎯 Predicting with ensemble {model_name}")
+            
             # Get predictions and probabilities
             predictions = model.predict(ensemble_features)
             probabilities = model.predict_proba(ensemble_features)
             
-            ensemble_predictions[f'ensemble_{model_name}_pred'] = predictions
-            ensemble_predictions[f'ensemble_{model_name}_prob_0'] = probabilities[:, 0]
-            ensemble_predictions[f'ensemble_{model_name}_prob_1'] = probabilities[:, 1]
-            ensemble_predictions[f'ensemble_{model_name}_prob_2'] = probabilities[:, 2]
+            # Convert back to -1, 0, 1 format
+            predictions_converted = predictions - 1  # 0,1,2 -> -1,0,1
             
-            logger.info(f"  ✅ Ensemble {model_name}: {len(predictions)} predictions")
+            # Calculate confidence (max probability)
+            confidences = np.max(probabilities, axis=1)
+            
+            # Store predictions
+            ensemble_predictions[f'ensemble_{model_name}_pred'] = predictions_converted
+            ensemble_predictions[f'ensemble_{model_name}_confidence'] = confidences
+            ensemble_predictions[f'ensemble_{model_name}_prob_0'] = probabilities[:, 0]  # Negative
+            ensemble_predictions[f'ensemble_{model_name}_prob_1'] = probabilities[:, 1]  # Neutral
+            ensemble_predictions[f'ensemble_{model_name}_prob_2'] = probabilities[:, 2]  # Positive
+            
+            # Individual model results
+            individual_results[model_name] = pd.DataFrame({
+                'prediction': predictions_converted,
+                'confidence': confidences,
+                'prob_negative': probabilities[:, 0],
+                'prob_neutral': probabilities[:, 1],
+                'prob_positive': probabilities[:, 2]
+            }, index=ensemble_features.index)
+            
+            # Save individual model results
+            output_file = self.ensemble_pred_dir / f"ensemble_{model_name}_predictions.csv"
+            individual_results[model_name].to_csv(output_file)
+            logger.info(f"    💾 Saved to {output_file}")
         
-        return ensemble_predictions
+        return ensemble_predictions, individual_results
         
-    def create_ensemble_features(self, text_predictions: Dict, financial_predictions: Dict, setup_ids: List[str]) -> pd.DataFrame:
-        """Create rich ensemble features from text and financial predictions"""
+    def confidence_weighted_ensemble(self, ensemble_predictions: Dict, setup_ids: List[str]) -> pd.DataFrame:
+        """Create confidence-weighted final predictions"""
+        logger.info("⚖️ Computing confidence-weighted ensemble predictions...")
         
-        # Collect all probability columns (24 features total)
-        ensemble_data = {}
+        final_predictions = []
+        final_confidences = []
+        final_outperformances = []
         
-        # Add text probabilities (4 models × 3 classes = 12 features)
-        for model_name in self.model_names:
-            if f'text_{model_name}_prob_0' in text_predictions:
-                ensemble_data[f'text_{model_name}_prob_0'] = text_predictions[f'text_{model_name}_prob_0']
-                ensemble_data[f'text_{model_name}_prob_1'] = text_predictions[f'text_{model_name}_prob_1']
-                ensemble_data[f'text_{model_name}_prob_2'] = text_predictions[f'text_{model_name}_prob_2']
+        # Mapping from prediction classes to outperformance values
+        class_to_outperformance = {-1: -5.0, 0: 0.0, 1: 5.0}  # Approximate mapping
         
-        # Add financial probabilities (4 models × 3 classes = 12 features)
-        for model_name in self.model_names:
-            if f'financial_{model_name}_prob_0' in financial_predictions:
-                ensemble_data[f'financial_{model_name}_prob_0'] = financial_predictions[f'financial_{model_name}_prob_0']
-                ensemble_data[f'financial_{model_name}_prob_1'] = financial_predictions[f'financial_{model_name}_prob_1']
-                ensemble_data[f'financial_{model_name}_prob_2'] = financial_predictions[f'financial_{model_name}_prob_2']
-        
-        # Create DataFrame
-        ensemble_features = pd.DataFrame(ensemble_data, index=setup_ids)
-        
-        # Add enhanced ensemble features
-        
-        # Add confidence measures (max probability)
-        for model_name in self.model_names:
-            if f'text_{model_name}_prob_0' in ensemble_features.columns:
-                # Text model confidence
-                ensemble_features[f'text_{model_name}_confidence'] = ensemble_features[[
-                    f'text_{model_name}_prob_0', 
-                    f'text_{model_name}_prob_1', 
-                    f'text_{model_name}_prob_2'
-                ]].max(axis=1)
+        for i in range(len(setup_ids)):
+            # Collect predictions and confidences
+            predictions = []
+            confidences = []
+            
+            for model_name in self.model_names:
+                pred_key = f'ensemble_{model_name}_pred'
+                conf_key = f'ensemble_{model_name}_confidence'
                 
-                # Financial model confidence
-                ensemble_features[f'financial_{model_name}_confidence'] = ensemble_features[[
-                    f'financial_{model_name}_prob_0', 
-                    f'financial_{model_name}_prob_1', 
-                    f'financial_{model_name}_prob_2'
-                ]].max(axis=1)
-                
-                # Confidence difference
-                ensemble_features[f'{model_name}_confidence_diff'] = np.abs(
-                    ensemble_features[f'text_{model_name}_confidence'] - 
-                    ensemble_features[f'financial_{model_name}_confidence']
-                )
-                
-                # Add agreement measures
-                for i in range(3):  # For each class (0, 1, 2)
-                    text_prob = ensemble_features[f'text_{model_name}_prob_{i}']
-                    fund_prob = ensemble_features[f'financial_{model_name}_prob_{i}']
-                    ensemble_features[f'{model_name}_class{i}_agreement'] = 1 - np.abs(text_prob - fund_prob)
+                if pred_key in ensemble_predictions and conf_key in ensemble_predictions:
+                    predictions.append(ensemble_predictions[pred_key][i])
+                    confidences.append(ensemble_predictions[conf_key][i])
+            
+            if len(predictions) == 0:
+                final_predictions.append(0)
+                final_confidences.append(0.33)
+                final_outperformances.append(0.0)
+                continue
+            
+            # Method 1: Confidence-weighted voting for classification
+            weighted_sum = 0
+            total_weight = 0
+            
+            for pred, conf in zip(predictions, confidences):
+                weighted_sum += pred * conf
+                total_weight += conf
+            
+            weighted_prediction = weighted_sum / total_weight if total_weight > 0 else 0
+            
+            # Convert to discrete class
+            if weighted_prediction >= 0.33:
+                final_pred = 1    # Positive
+            elif weighted_prediction <= -0.33:
+                final_pred = -1   # Negative
+            else:
+                final_pred = 0    # Neutral
+            
+            # Method 2: Confidence-weighted outperformance prediction
+            weighted_outperformance = sum(class_to_outperformance[pred] * conf 
+                                        for pred, conf in zip(predictions, confidences))
+            weighted_outperformance /= total_weight if total_weight > 0 else 1
+            
+            # Final confidence as weighted average of individual confidences
+            final_conf = total_weight / len(confidences) if len(confidences) > 0 else 0.33
+            
+            final_predictions.append(final_pred)
+            final_confidences.append(final_conf)
+            final_outperformances.append(weighted_outperformance)
         
-        logger.info(f"Created ensemble features shape: {ensemble_features.shape}")
-        return ensemble_features
+        # Create final results DataFrame
+        final_results = pd.DataFrame({
+            'prediction': final_predictions,
+            'confidence': final_confidences,
+            'predicted_outperformance_10d': final_outperformances
+        }, index=setup_ids)
+        
+        logger.info(f"✅ Generated {len(final_predictions)} confidence-weighted predictions")
+        logger.info(f"📊 Prediction distribution: {pd.Series(final_predictions).value_counts().to_dict()}")
+        logger.info(f"📊 Mean confidence: {np.mean(final_confidences):.3f}")
+        logger.info(f"📊 Mean predicted outperformance: {np.mean(final_outperformances):.3f}%")
+        
+        return final_results
         
     def run_complete_prediction(self) -> Dict[str, pd.DataFrame]:
         """Run the complete 3-stage prediction pipeline"""
@@ -213,217 +419,129 @@ class ThreeStageMLPredictor:
         X_financial, _ = self.feature_loader.load_financial_features("prediction")
         
         if X_text is None or X_financial is None:
-            raise ValueError("Failed to load prediction data")
+            raise ValueError("Failed to load prediction features")
         
-        # Ensure same setup IDs
+        # Get common setup IDs
         common_ids = list(set(X_text.index) & set(X_financial.index))
-        X_text = X_text.loc[common_ids]
-        X_financial = X_financial.loc[common_ids]
+        logger.info(f"📊 Found {len(common_ids)} common setup IDs for prediction")
         
-        logger.info(f"Using {len(common_ids)} common setup IDs for prediction")
-        
-        # Load all models
-        self.load_all_models()
+        # Filter to common IDs
+        X_text_common = X_text.loc[common_ids]
+        X_financial_common = X_financial.loc[common_ids]
         
         # Stage 1: Text predictions
-        text_predictions = self.predict_stage1_text(X_text)
+        text_predictions, text_individual = self.predict_stage1_text(X_text_common)
         
         # Stage 2: Financial predictions
-        financial_predictions = self.predict_stage2_financial(X_financial)
+        financial_predictions, financial_individual = self.predict_stage2_financial(X_financial_common)
         
-        # Create ensemble features
+        # Stage 3: Create ensemble features
         ensemble_features = self.create_ensemble_features(text_predictions, financial_predictions, common_ids)
         
         # Stage 3: Ensemble predictions
-        ensemble_predictions = self.predict_stage3_ensemble(ensemble_features)
+        ensemble_predictions, ensemble_individual = self.predict_stage3_ensemble(ensemble_features)
         
-        # Create result DataFrames
-        results = {}
+        # Final: Confidence-weighted ensemble
+        final_results = self.confidence_weighted_ensemble(ensemble_predictions, common_ids)
         
-        # Text predictions DataFrame
-        text_df_data = {col: values for col, values in text_predictions.items()}
-        results['text'] = pd.DataFrame(text_df_data, index=common_ids)
+        # Save final results
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        final_output_file = self.output_dir / f"final_predictions_{timestamp}.csv"
+        final_results.to_csv(final_output_file)
+        logger.info(f"💾 Saved final predictions to {final_output_file}")
         
-        # Financial predictions DataFrame
-        financial_df_data = {col: values for col, values in financial_predictions.items()}
-        results['financial'] = pd.DataFrame(financial_df_data, index=common_ids)
-        
-        # Ensemble predictions DataFrame
-        ensemble_df_data = {col: values for col, values in ensemble_predictions.items()}
-        results['ensemble'] = pd.DataFrame(ensemble_df_data, index=common_ids)
-        
-        # Final predictions (average of ensemble models, converted back to -1, 0, 1)
-        final_predictions = []
-        final_confidences = []
-        
-        for i in range(len(common_ids)):
-            # Average probabilities across ensemble models
-            probs = np.zeros(3)
-            for model_name in self.model_names:
-                if f'ensemble_{model_name}_prob_0' in ensemble_predictions:
-                    probs[0] += ensemble_predictions[f'ensemble_{model_name}_prob_0'][i]
-                    probs[1] += ensemble_predictions[f'ensemble_{model_name}_prob_1'][i]
-                    probs[2] += ensemble_predictions[f'ensemble_{model_name}_prob_2'][i]
-            
-            probs /= len(self.ensemble_models)  # Average
-            
-            # Get final prediction and confidence
-            final_pred = np.argmax(probs) - 1  # Convert 0,1,2 back to -1,0,1
-            final_conf = np.max(probs)
-            
-            final_predictions.append(final_pred)
-            final_confidences.append(final_conf)
-        
-        # Final results DataFrame
-        results['final'] = pd.DataFrame({
-            'prediction': final_predictions,
-            'confidence': final_confidences,
-            'prob_negative': [ensemble_predictions[f'ensemble_{self.model_names[0]}_prob_0'][i] for i in range(len(common_ids))],
-            'prob_neutral': [ensemble_predictions[f'ensemble_{self.model_names[0]}_prob_1'][i] for i in range(len(common_ids))], 
-            'prob_positive': [ensemble_predictions[f'ensemble_{self.model_names[0]}_prob_2'][i] for i in range(len(common_ids))]
-        }, index=common_ids)
+        # Create summary report
+        self._generate_prediction_summary(text_individual, financial_individual, ensemble_individual, final_results)
         
         logger.info("✅ Complete 3-Stage ML Prediction Pipeline finished successfully!")
-        return results
         
-    def save_results(self, results: Dict[str, pd.DataFrame], output_dir: str):
-        """Save prediction results to files"""
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+        return {
+            'text': text_individual,
+            'financial': financial_individual, 
+            'ensemble': ensemble_individual,
+            'final': final_results
+        }
         
+    def _generate_prediction_summary(self, text_results: Dict, financial_results: Dict, 
+                                   ensemble_results: Dict, final_results: pd.DataFrame):
+        """Generate prediction summary report"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_path = self.output_dir / f"prediction_summary_{timestamp}.txt"
         
-        # Save individual result files
-        for stage, df in results.items():
-            filename = f"{stage}_predictions_{timestamp}.csv"
-            file_path = output_path / filename
-            df.to_csv(file_path)
-            logger.info(f"💾 Saved {stage} predictions to {file_path}")
-        
-        # Create comprehensive summary report
-        report_path = output_path / f"prediction_report_{timestamp}.txt"
         with open(report_path, 'w') as f:
-            f.write("3-STAGE ML PIPELINE PREDICTION REPORT\n")
-            f.write("="*50 + "\n\n")
+            f.write("3-STAGE ML PREDICTION SUMMARY\n")
+            f.write("="*50 + "\n")
             f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             
-            # Overview
-            f.write("PREDICTION OVERVIEW\n")
-            f.write("-"*30 + "\n")
-            f.write(f"Total setup IDs: {len(results['final'])}\n")
-            f.write(f"Models directory: {self.models_dir}\n")
-            f.write(f"Input directory: {self.input_dir}\n\n")
+            # Dataset overview
+            f.write("PREDICTION DATASET OVERVIEW\n")
+            f.write("-" * 30 + "\n")
+            f.write(f"Total predictions: {len(final_results)}\n")
+            f.write(f"Text models: {len(text_results)}\n")
+            f.write(f"Financial models: {len(financial_results)}\n")
+            f.write(f"Ensemble models: {len(ensemble_results)}\n\n")
             
-            # Final predictions
-            if 'final' in results:
-                f.write("FINAL PREDICTIONS\n")
-                f.write("-"*30 + "\n")
-                pred_counts = results['final']['prediction'].value_counts().sort_index()
-                f.write(f"Prediction distribution:\n")
-                
-                # Convert 0-based to -1, 0, 1 labels for display
-                class_names = ['Negative (-1)', 'Neutral (0)', 'Positive (1)']
-                for i, count in pred_counts.items():
-                    pct = count / len(results['final']) * 100
-                    # Adjust index for display (prediction is already in -1, 0, 1 format)
-                    class_name = class_names[i+1] if i >= -1 and i <= 1 else f"Unknown ({i})"
-                    f.write(f"  {class_name}: {count} ({pct:.1f}%)\n")
-                
-                f.write(f"\nAverage confidence: {results['final']['confidence'].mean():.3f}\n\n")
-                
-                # Calculate high confidence predictions
-                high_conf = results['final'][results['final']['confidence'] > 0.8]
-                f.write(f"High confidence predictions (>0.8): {len(high_conf)} ({len(high_conf)/len(results['final'])*100:.1f}%)\n\n")
+            # Final prediction distribution
+            f.write("FINAL PREDICTION DISTRIBUTION\n")
+            f.write("-" * 30 + "\n")
+            pred_counts = final_results['prediction'].value_counts()
+            for pred, count in pred_counts.items():
+                pct = count / len(final_results) * 100
+                label = {-1: 'Negative', 0: 'Neutral', 1: 'Positive'}[pred]
+                f.write(f"{label}: {count} predictions ({pct:.1f}%)\n")
+            f.write("\n")
             
-            # Domain-specific predictions
-            for stage in ['text', 'financial', 'ensemble']:
-                if stage in results:
-                    f.write(f"{stage.upper()} MODEL PREDICTIONS\n")
-                    f.write("-"*30 + "\n")
-                    f.write(f"Number of models: {len([c for c in results[stage].columns if c.endswith('_pred')])}\n")
-                    
-                    # Calculate average predictions across models
-                    pred_cols = [c for c in results[stage].columns if c.endswith('_pred')]
-                    if pred_cols:
-                        avg_preds = results[stage][pred_cols].mode(axis=1)[0]
-                        pred_counts = avg_preds.value_counts().sort_index()
-                        f.write(f"Average prediction distribution:\n")
-                        for i, count in pred_counts.items():
-                            pct = count / len(avg_preds) * 100
-                            f.write(f"  Class {i}: {count} ({pct:.1f}%)\n")
-                    
-                    # Calculate average confidence
-                    conf_cols = [c for c in results[stage].columns if 'confidence' in c]
-                    if conf_cols:
-                        avg_conf = results[stage][conf_cols].mean().mean()
-                        f.write(f"Average confidence: {avg_conf:.3f}\n")
-                    
-                    f.write("\n")
-            
-            # Agreement analysis
-            f.write("DOMAIN AGREEMENT ANALYSIS\n")
-            f.write("-"*30 + "\n")
-            
-            try:
-                # Get predictions from each domain's best model
-                text_best = [c for c in results['text'].columns if c.endswith('_pred')][0]
-                financial_best = [c for c in results['financial'].columns if c.endswith('_pred')][0]
-                
-                text_preds = results['text'][text_best]
-                financial_preds = results['financial'][financial_best]
-                
-                # Calculate agreement
-                agreement = (text_preds == financial_preds).mean()
-                f.write(f"Text-Financial agreement: {agreement:.3f} ({agreement*100:.1f}%)\n")
-                
-                # Calculate disagreement types
-                text_pos_fin_neg = ((text_preds == 2) & (financial_preds == 0)).sum()
-                text_neg_fin_pos = ((text_preds == 0) & (financial_preds == 2)).sum()
-                
-                f.write(f"Text positive, Financial negative: {text_pos_fin_neg} cases\n")
-                f.write(f"Text negative, Financial positive: {text_neg_fin_pos} cases\n\n")
-            except:
-                f.write("Could not calculate domain agreement\n\n")
+            # Confidence statistics
+            f.write("CONFIDENCE STATISTICS\n")
+            f.write("-" * 30 + "\n")
+            f.write(f"Mean confidence: {final_results['confidence'].mean():.3f}\n")
+            f.write(f"Median confidence: {final_results['confidence'].median():.3f}\n")
+            f.write(f"Min confidence: {final_results['confidence'].min():.3f}\n")
+            f.write(f"Max confidence: {final_results['confidence'].max():.3f}\n\n")
             
             # Output files
             f.write("OUTPUT FILES\n")
-            f.write("-"*30 + "\n")
-            for stage, df in results.items():
-                f.write(f"{stage}_predictions_{timestamp}.csv\n")
-            f.write("\n")
+            f.write("-" * 30 + "\n")
+            f.write("Individual Model Predictions:\n")
+            f.write("- ml/prediction/text_ml/text_[model]_predictions.csv\n")
+            f.write("- ml/prediction/financial_ml/financial_[model]_predictions.csv\n")
+            f.write("- ml/prediction/ensemble/ensemble_[model]_predictions.csv\n")
+            f.write("\nFinal Results:\n")
+            f.write(f"- {final_results.index.name}_predictions_{timestamp}.csv\n\n")
             
-            f.write("="*50 + "\n")
-        
-        logger.info(f"📄 Saved prediction report to {report_path}")
+            f.write("=" * 50 + "\n")
+            
+        logger.info(f"📄 Prediction summary saved to {report_path}")
+
 
 def main():
-    parser = argparse.ArgumentParser(description="3-Stage ML Pipeline Prediction")
-    parser.add_argument("--input-dir", default="data/ml_features/balanced",
-                       help="Directory containing prediction data CSV files")
-    parser.add_argument("--models-dir", required=True,
-                       help="Directory containing trained models")
-    parser.add_argument("--output-dir", default="data/predictions",
-                       help="Directory to save prediction results")
-    parser.add_argument("--high-confidence-threshold", type=float, default=0.8,
-                       help="Threshold for high confidence predictions (default: 0.8)")
+    parser = argparse.ArgumentParser(description='3-Stage ML Prediction Pipeline')
+    parser.add_argument('--input-dir', default='data/ml_features/balanced', 
+                       help='Directory containing prediction feature CSV files')
+    parser.add_argument('--model-dir', default='models_3stage_fixed', 
+                       help='Directory containing trained models')
+    parser.add_argument('--output-dir', default='ml/prediction', 
+                       help='Output directory for predictions')
     
     args = parser.parse_args()
     
+    # Initialize predictor
+    predictor = ThreeStageMLPredictor(
+        model_dir=args.model_dir,
+        output_dir=args.output_dir
+    )
+    
+    # Update feature loader with input directory
+    predictor.feature_loader = CorrectedCSVFeatureLoader(args.input_dir)
+    
     try:
-        # Initialize predictor
-        predictor = ThreeStageMLPredictor(args.models_dir, args.input_dir)
-        
-        # Run predictions
         results = predictor.run_complete_prediction()
-        
-        # Save results
-        predictor.save_results(results, args.output_dir)
-        
         logger.info("🎉 Prediction pipeline completed successfully!")
         
     except Exception as e:
-        logger.error(f"❌ Pipeline failed with error: {e}")
-        sys.exit(1)
+        logger.error(f"❌ Prediction pipeline failed with error: {e}")
+        raise
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main() 
