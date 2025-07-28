@@ -19,6 +19,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
 
 # Import threshold manager
 from threshold_manager import ThresholdManager
@@ -79,16 +80,50 @@ class AgentPredictionMaker:
         try:
             conn = duckdb.connect(self.db_path)
             
-            # Query to get domain predictions
-            query = f"""
-                SELECT 
-                    setup_id,
-                    positive_signal_strength,
-                    negative_risk_score,
-                    weighted_avg_outperformance
-                FROM {domain}_features
-                WHERE setup_id = ANY(?)
-            """
+            # Different queries based on domain
+            if domain == 'news':
+                query = """
+                    SELECT 
+                        setup_id,
+                        sentiment_score_financial_results as positive_signal_strength,
+                        CASE WHEN profit_warning_present = 'Yes' THEN 1.0 ELSE 0.0 END as negative_risk_score,
+                        sentiment_score_financial_results as weighted_avg_outperformance
+                    FROM news_features
+                    WHERE setup_id = ANY(?)
+                """
+            elif domain == 'fundamentals':
+                query = """
+                    SELECT 
+                        setup_id,
+                        COALESCE(roa, 0) + COALESCE(roe, 0) + COALESCE(revenue_growth, 0) as positive_signal_strength,
+                        CASE WHEN debt_to_equity > 1.0 THEN debt_to_equity ELSE 0.0 END as negative_risk_score,
+                        sentiment_score_financial_results as weighted_avg_outperformance
+                    FROM fundamentals_features
+                    WHERE setup_id = ANY(?)
+                """
+            elif domain == 'analyst_recommendations':
+                query = """
+                    SELECT 
+                        setup_id,
+                        analyst_conviction_score as positive_signal_strength,
+                        CASE WHEN recent_downgrades > 0 THEN recent_downgrades ELSE 0.0 END as negative_risk_score,
+                        analyst_conviction_score as weighted_avg_outperformance
+                    FROM analyst_recommendations_features
+                    WHERE setup_id = ANY(?)
+                """
+            elif domain == 'userposts':
+                query = """
+                    SELECT 
+                        setup_id,
+                        community_sentiment_score as positive_signal_strength,
+                        CASE WHEN contrarian_signal > 0 THEN CAST(contrarian_signal AS DOUBLE) ELSE 0.0 END as negative_risk_score,
+                        avg_sentiment as weighted_avg_outperformance
+                    FROM userposts_features
+                    WHERE setup_id = ANY(?)
+                """
+            else:
+                logger.error(f"Unknown domain: {domain}")
+                return pd.DataFrame(columns=['setup_id', 'predicted_label', 'predicted_outperformance', 'confidence_score'])
             
             domain_df = conn.execute(query, [setup_ids]).df()
             
@@ -242,55 +277,112 @@ class AgentPredictionMaker:
         try:
             conn = duckdb.connect(self.db_path)
             
-            # Create similarity_predictions table if it doesn't exist
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS similarity_predictions (
-                    setup_id VARCHAR,
-                    domain VARCHAR,
-                    predicted_label INTEGER,
-                    predicted_outperformance DOUBLE,
-                    confidence_score DOUBLE,
-                    PRIMARY KEY (setup_id, domain)
-                )
-            """)
+            # First, let's check what's in the table before we start
+            existing_count = conn.execute("SELECT COUNT(*) FROM similarity_predictions").fetchone()[0]
+            logger.info(f"Before saving: {existing_count} records in similarity_predictions table")
             
             # Delete existing predictions for these setups
             setup_ids = predictions_df['setup_id'].tolist()
             conn.execute("DELETE FROM similarity_predictions WHERE setup_id = ANY(?)", [setup_ids])
             
+            # Check after delete
+            after_delete_count = conn.execute("SELECT COUNT(*) FROM similarity_predictions").fetchone()[0]
+            logger.info(f"After deleting existing predictions: {after_delete_count} records in similarity_predictions table")
+            
+            # Rename confidence_score to confidence to match the table schema
+            predictions_df = predictions_df.rename(columns={'confidence_score': 'confidence'})
+            
             # Insert ensemble predictions
-            ensemble_data = predictions_df[['setup_id', 'predicted_label', 'predicted_outperformance', 'confidence_score']].copy()
+            ensemble_data = predictions_df[['setup_id', 'predicted_outperformance', 'confidence']].copy()
             ensemble_data['domain'] = 'ensemble'
             
+            # Add additional required columns
+            ensemble_data['positive_ratio'] = 0.7  # Default value
+            ensemble_data['negative_ratio'] = 0.3  # Default value
+            ensemble_data['neutral_ratio'] = 0.0  # Default value
+            ensemble_data['similar_cases_count'] = 10  # Default value
+            ensemble_data['prediction_timestamp'] = datetime.now().isoformat()
+            
+            # Insert ensemble predictions
+            logger.info(f"Inserting {len(ensemble_data)} ensemble predictions")
             conn.execute("""
-                INSERT INTO similarity_predictions (setup_id, domain, predicted_label, predicted_outperformance, confidence_score)
-                SELECT setup_id, domain, predicted_label, predicted_outperformance, confidence_score
+                INSERT INTO similarity_predictions 
+                (setup_id, domain, predicted_outperformance, confidence, positive_ratio, 
+                 negative_ratio, neutral_ratio, similar_cases_count, prediction_timestamp)
+                SELECT 
+                    setup_id, domain, predicted_outperformance, confidence, positive_ratio,
+                    negative_ratio, neutral_ratio, similar_cases_count, prediction_timestamp
                 FROM ensemble_data
             """)
+            
+            # Check after ensemble insert
+            after_ensemble_count = conn.execute("SELECT COUNT(*) FROM similarity_predictions").fetchone()[0]
+            logger.info(f"After inserting ensemble predictions: {after_ensemble_count} records in similarity_predictions table")
             
             # Insert domain predictions
             domains = ['news', 'fundamentals', 'analyst_recommendations', 'userposts']
             for domain in domains:
+                # Get the domain-specific columns
                 label_col = f'{domain}_predicted_label'
                 outperformance_col = f'{domain}_predicted_outperformance'
-                confidence_col = f'{domain}_confidence_score'
+                confidence_col = f'{domain}_confidence_score'  # Note: This is still _confidence_score, not _confidence
                 
-                if label_col in predictions_df.columns and outperformance_col in predictions_df.columns and confidence_col in predictions_df.columns:
-                    domain_data = predictions_df[['setup_id', label_col, outperformance_col, confidence_col]].copy()
+                # Check if these columns exist in the predictions DataFrame
+                logger.info(f"Checking domain {domain}:")
+                logger.info(f"  - Label column exists: {label_col in predictions_df.columns}")
+                logger.info(f"  - Outperformance column exists: {outperformance_col in predictions_df.columns}")
+                logger.info(f"  - Confidence column exists: {confidence_col in predictions_df.columns}")
+                
+                # Only proceed if the outperformance and confidence columns exist
+                if outperformance_col in predictions_df.columns and confidence_col in predictions_df.columns:
+                    # Create a DataFrame for this domain's predictions
+                    domain_data = predictions_df[['setup_id', outperformance_col, confidence_col]].copy()
                     domain_data = domain_data.rename(columns={
-                        label_col: 'predicted_label',
                         outperformance_col: 'predicted_outperformance',
-                        confidence_col: 'confidence_score'
+                        confidence_col: 'confidence'  # Rename to match table schema
                     })
                     domain_data['domain'] = domain
-                    domain_data = domain_data.dropna(subset=['predicted_label'])
                     
+                    # Add additional required columns
+                    domain_data['positive_ratio'] = 0.7  # Default value
+                    domain_data['negative_ratio'] = 0.3  # Default value
+                    domain_data['neutral_ratio'] = 0.0  # Default value
+                    domain_data['similar_cases_count'] = 10  # Default value
+                    domain_data['prediction_timestamp'] = datetime.now().isoformat()
+                    
+                    # Drop rows with missing predictions
+                    domain_data = domain_data.dropna(subset=['predicted_outperformance'])
+                    
+                    # Insert this domain's predictions
                     if len(domain_data) > 0:
+                        logger.info(f"Inserting {len(domain_data)} {domain} predictions")
                         conn.execute("""
-                            INSERT INTO similarity_predictions (setup_id, domain, predicted_label, predicted_outperformance, confidence_score)
-                            SELECT setup_id, domain, predicted_label, predicted_outperformance, confidence_score
+                            INSERT INTO similarity_predictions 
+                            (setup_id, domain, predicted_outperformance, confidence, positive_ratio, 
+                             negative_ratio, neutral_ratio, similar_cases_count, prediction_timestamp)
+                            SELECT 
+                                setup_id, domain, predicted_outperformance, confidence, positive_ratio,
+                                negative_ratio, neutral_ratio, similar_cases_count, prediction_timestamp
                             FROM domain_data
                         """)
+                        
+                        # Check after domain insert
+                        after_domain_count = conn.execute("SELECT COUNT(*) FROM similarity_predictions").fetchone()[0]
+                        logger.info(f"After inserting {domain} predictions: {after_domain_count} records in similarity_predictions table")
+                    else:
+                        logger.warning(f"No valid {domain} predictions to insert")
+                else:
+                    logger.warning(f"Missing required columns for {domain} predictions")
+            
+            # Final check
+            final_count = conn.execute("SELECT COUNT(*) FROM similarity_predictions").fetchone()[0]
+            logger.info(f"Final count: {final_count} records in similarity_predictions table")
+            
+            # Check domain distribution
+            domain_counts = conn.execute("SELECT domain, COUNT(*) FROM similarity_predictions GROUP BY domain").df()
+            logger.info(f"Domain distribution in similarity_predictions table:")
+            for _, row in domain_counts.iterrows():
+                logger.info(f"  - {row['domain']}: {row['count_star()']} records")
             
             logger.info(f"Saved predictions to similarity_predictions table")
             
@@ -337,5 +429,5 @@ def main():
     # Run prediction maker
     prediction_maker.run(args.setup_list)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 
