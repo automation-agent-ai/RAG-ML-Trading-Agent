@@ -1617,6 +1617,133 @@ Outcome: Stock {'outperformed' if outcome > 0 else 'underperformed' if outcome <
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
 
+    def predict_with_llm(self, setup_id: str, current_features: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Make LLM-based prediction using current news features and similar historical cases
+        
+        Args:
+            setup_id: Current setup ID
+            current_features: Extracted news features for current setup
+            
+        Returns:
+            Dictionary with LLM prediction results
+        """
+        try:
+            # Create context from current news features
+            context = f"""Setup {setup_id} News Analysis:
+- Financial Results Sentiment: {current_features.get('sentiment_score_financial_results', 0.0)}
+- Severity Score: {current_features.get('max_severity_financial_results', 0.0)}
+- Profit Warning: {current_features.get('profit_warning_present', False)}
+- Corporate Actions: {current_features.get('capital_raise_present', False)}
+- News Summary: {current_features.get('synthetic_summary_financial_results', 'N/A')}"""
+            
+            # Get similar training examples for prediction context
+            similar_cases = self.find_similar_training_embeddings(context, limit=5)
+            
+            # Create prediction prompt with few-shot examples
+            examples_section = ""
+            if similar_cases:
+                examples_section = "\n\n**HISTORICAL EXAMPLES TO LEARN FROM:**\n"
+                for i, case in enumerate(similar_cases[:3], 1):
+                    outcome = case.get('outperformance_10d', 0.0)
+                    case_text = case.get('chunk_text', case.get('text_content', ''))[:150]
+                    examples_section += f"""
+Example {i}:
+News Context: "{case_text}..."
+Actual Outcome: {outcome:+.1f}% outperformance vs sector (10 days)
+Result: {'POSITIVE' if outcome > 0 else 'NEGATIVE' if outcome < 0 else 'NEUTRAL'}
+"""
+                examples_section += "\nBased on these historical news patterns, analyze the current setup:\n"
+            
+            prediction_prompt = f"""You are an expert financial news analyst making investment predictions.
+
+{examples_section}
+
+**CURRENT SETUP TO PREDICT:**
+{context}
+
+Based on the news analysis and historical patterns above, predict the 10-day stock outperformance vs sector.
+
+Return your prediction as JSON:
+{{
+    "predicted_outperformance_10d": <float between -15.0 and +15.0>,
+    "confidence_score": <float between 0.0 and 1.0>,
+    "prediction_class": "<POSITIVE|NEGATIVE|NEUTRAL>",
+    "reasoning": "<brief explanation of your prediction logic>"
+}}
+
+Focus on:
+- News sentiment and market perception
+- Corporate announcements impact
+- Risk signals (profit warnings, downgrades)
+- Historical news pattern similarities"""
+
+            # Make LLM prediction call
+            response = self.client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": "You are an expert financial news analyst specializing in stock performance prediction. Analyze news data and make accurate predictions based on historical patterns."},
+                    {"role": "user", "content": prediction_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=400
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            logger.info(f"News LLM raw response for {setup_id}: {result_text[:200]}...")
+            
+            # Parse JSON response with better error handling
+            try:
+                if result_text.startswith('```json'):
+                    result_text = result_text.split('```json')[1].split('```')[0].strip()
+                elif result_text.startswith('```'):
+                    result_text = result_text.split('```')[1].split('```')[0].strip()
+                
+                import json
+                prediction_result = json.loads(result_text)
+                
+                # Validate required fields
+                if 'predicted_outperformance_10d' not in prediction_result:
+                    prediction_result['predicted_outperformance_10d'] = 0.0
+                if 'confidence_score' not in prediction_result:
+                    prediction_result['confidence_score'] = 0.5
+                if 'prediction_class' not in prediction_result:
+                    prediction_result['prediction_class'] = 'NEUTRAL'
+                if 'reasoning' not in prediction_result:
+                    prediction_result['reasoning'] = 'Prediction completed'
+                    
+            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                logger.error(f"JSON parsing failed for {setup_id}: {e}")
+                logger.error(f"Raw response: {result_text}")
+                # Create default prediction as requested: outperformance=0.0, confidence=0.34
+                prediction_result = {
+                    'predicted_outperformance_10d': 0.0,
+                    'confidence_score': 0.34,
+                    'prediction_class': 'NEUTRAL',
+                    'reasoning': f'JSON parsing failed: {str(e)}'
+                }
+            
+            # Add metadata
+            prediction_result['setup_id'] = setup_id
+            prediction_result['prediction_method'] = 'llm_few_shot'
+            prediction_result['similar_cases_used'] = len(similar_cases)
+            
+            logger.info(f"News LLM prediction for {setup_id}: {prediction_result.get('predicted_outperformance_10d', 0.0):.2f}% (confidence: {prediction_result.get('confidence_score', 0.0):.2f})")
+            
+            return prediction_result
+            
+        except Exception as e:
+            logger.error(f"Error in news LLM prediction for {setup_id}: {e}")
+            return {
+                'setup_id': setup_id,
+                'predicted_outperformance_10d': 0.0,
+                'confidence_score': 0.1,
+                'prediction_class': 'NEUTRAL',
+                'reasoning': 'Error in prediction - defaulting to neutral',
+                'prediction_method': 'llm_few_shot_error',
+                'similar_cases_used': 0
+            }
+
 
 class NewsEmbeddingPipelineDuckDB:
     """Pipeline for creating and storing news embeddings in DuckDB"""

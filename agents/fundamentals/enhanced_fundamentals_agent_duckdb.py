@@ -149,14 +149,37 @@ class EnhancedFundamentalsAgentDuckDB:
         try:
             db = lancedb.connect(self.lancedb_dir)
             
-            # In prediction mode, we don't need to open any tables
+            # In prediction mode, we don't need to open the main table but we DO need training table
             if hasattr(self, 'mode') and self.mode == 'prediction':
-                logger.info("Prediction mode: Skipping table opening")
+                logger.info("Prediction mode: Skipping main table opening but connecting to training table")
                 self.table = None
+                
+                # Initialize training table for similarity search (REQUIRED for prediction)
                 self.training_table = None
+                try:
+                    # Try to open with training table name first
+                    try:
+                        self.training_table = db.open_table("fundamentals_embeddings")
+                        logger.info("Connected to fundamentals_embeddings table for similarity search in prediction mode")
+                    except Exception as e:
+                        logger.warning(f"Could not open fundamentals_embeddings table: {e}")
+                        # Try alternative table names
+                        for table_name in ["fundamentals_embeddings_training", "fundamentals_embeddings_old"]:
+                            try:
+                                self.training_table = db.open_table(table_name)
+                                logger.info(f"Connected to {table_name} table for similarity search in prediction mode")
+                                break
+                            except Exception:
+                                continue
+                        
+                        if self.training_table is None:
+                            logger.error("Could not connect to any fundamentals training embeddings table")
+                            
+                except Exception as e:
+                    logger.error(f"Error connecting to training embeddings table: {e}")
                 return
             
-            # Try to open the table
+            # Training mode logic (unchanged)
             try:
                 self.table = db.open_table(self.table_name)
                 logger.info(f"Connected to LanceDB table: {self.table_name}")
@@ -180,16 +203,11 @@ class EnhancedFundamentalsAgentDuckDB:
                         logger.warning(f"Could not open training embeddings table: {e}")
             except Exception as e:
                 logger.warning(f"Could not open training embeddings table: {e}")
+            
         except Exception as e:
-            logger.error(f"Error connecting to LanceDB: {e}")
-            # In prediction mode, we can continue without LanceDB
-            if hasattr(self, 'mode') and self.mode == 'prediction':
-                logger.warning("Continuing in prediction mode without LanceDB connection")
-                self.db = None
-                self.table = None
-                self.training_table = None
-            else:
-                raise
+            logger.error(f"Failed to connect to LanceDB: {e}")
+            self.table = None
+            self.training_table = None
     
     def _init_duckdb_feature_storage(self):
         """Initialize DuckDB tables for feature storage"""
@@ -759,7 +777,7 @@ Focus on financial performance, earnings, profit warnings, and capital structure
             Dictionary with prediction results
         """
         # Find similar cases
-        similar_cases = self.find_similar_training_embeddings(query, limit=10)
+        similar_cases = self.find_similar_training_embeddings(query, limit=5)
         
         if not similar_cases:
             logger.warning("No similar cases found for prediction")
@@ -793,6 +811,135 @@ Focus on financial performance, earnings, profit warnings, and capital structure
         }
         
         return prediction
+
+    def predict_with_llm(self, setup_id: str, current_features: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Make LLM-based prediction using current features and similar historical cases
+        
+        Args:
+            setup_id: Current setup ID
+            current_features: Extracted features for current setup
+            
+        Returns:
+            Dictionary with LLM prediction results
+        """
+        try:
+            # Create context from current features
+            context = f"""Setup {setup_id} Financial Analysis:
+- Financial Results Count: {current_features.get('count_financial_results', 0)}
+- Severity Score: {current_features.get('max_severity_financial_results', 0.0)}
+- Sentiment: {current_features.get('sentiment_score_financial_results', 0.0)}
+- Profit Warning: {current_features.get('profit_warning_present', False)}
+- Summary: {current_features.get('synthetic_summary_financial_results', 'N/A')}"""
+            
+            # Get similar training examples for prediction context
+            similar_cases = self.find_similar_training_embeddings(context, limit=5)
+            
+            # Create prediction prompt with few-shot examples
+            examples_section = ""
+            if similar_cases:
+                examples_section = "\n\n**HISTORICAL EXAMPLES TO LEARN FROM:**\n"
+                for i, case in enumerate(similar_cases[:3], 1):
+                    outcome = case.get('outperformance_10d', 0.0)
+                    # Get relevant features from the case
+                    case_summary = case.get('financial_summary', case.get('text_content', ''))[:150]
+                    examples_section += f"""
+Example {i}:
+Financial Context: "{case_summary}..."
+Actual Outcome: {outcome:+.1f}% outperformance vs sector (10 days)
+Result: {'POSITIVE' if outcome > 0 else 'NEGATIVE' if outcome < 0 else 'NEUTRAL'}
+"""
+                examples_section += "\nBased on these historical patterns, analyze the current setup:\n"
+            
+            prediction_prompt = f"""You are an expert financial analyst making investment predictions.
+
+{examples_section}
+
+**CURRENT SETUP TO PREDICT:**
+{context}
+
+Based on the financial analysis and historical patterns above, predict the 10-day stock outperformance vs sector.
+
+Return your prediction as JSON:
+{{
+    "predicted_outperformance_10d": <float between -15.0 and +15.0>,
+    "confidence_score": <float between 0.0 and 1.0>,
+    "prediction_class": "<POSITIVE|NEGATIVE|NEUTRAL>",
+    "reasoning": "<brief explanation of your prediction logic>"
+}}
+
+Focus on:
+- Financial performance signals (earnings, revenue, margins)
+- Risk factors (profit warnings, capital raises)
+- Market sentiment indicators
+- Historical pattern similarities"""
+
+            # Make LLM prediction call
+            response = self.client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": "You are an expert financial analyst specializing in stock performance prediction. Analyze financial data and make accurate predictions based on historical patterns."},
+                    {"role": "user", "content": prediction_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=400
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            logger.info(f"LLM raw response for {setup_id}: {result_text[:200]}...")
+            
+            # Parse JSON response with better error handling
+            try:
+                if result_text.startswith('```json'):
+                    result_text = result_text.split('```json')[1].split('```')[0].strip()
+                elif result_text.startswith('```'):
+                    result_text = result_text.split('```')[1].split('```')[0].strip()
+                
+                import json
+                prediction_result = json.loads(result_text)
+                
+                # Validate required fields
+                if 'predicted_outperformance_10d' not in prediction_result:
+                    prediction_result['predicted_outperformance_10d'] = 0.0
+                if 'confidence_score' not in prediction_result:
+                    prediction_result['confidence_score'] = 0.5
+                if 'prediction_class' not in prediction_result:
+                    prediction_result['prediction_class'] = 'NEUTRAL'
+                if 'reasoning' not in prediction_result:
+                    prediction_result['reasoning'] = 'Prediction completed'
+                    
+            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                logger.error(f"JSON parsing failed for {setup_id}: {e}")
+                logger.error(f"Raw response: {result_text}")
+                # Create default prediction as requested: outperformance=0.0, confidence=0.34
+                prediction_result = {
+                    'predicted_outperformance_10d': 0.0,
+                    'confidence_score': 0.34,
+                    'prediction_class': 'NEUTRAL',
+                    'reasoning': f'JSON parsing failed: {str(e)}'
+                }
+            
+            # Add metadata
+            prediction_result['setup_id'] = setup_id
+            prediction_result['prediction_method'] = 'llm_few_shot'
+            prediction_result['similar_cases_used'] = len(similar_cases)
+            
+            logger.info(f"LLM prediction for {setup_id}: {prediction_result.get('predicted_outperformance_10d', 0.0):.2f}% (confidence: {prediction_result.get('confidence_score', 0.0):.2f})")
+            
+            return prediction_result
+            
+        except Exception as e:
+            logger.error(f"Error in LLM prediction for {setup_id}: {e}")
+            # Return default prediction
+            return {
+                'setup_id': setup_id,
+                'predicted_outperformance_10d': 0.0,
+                'confidence_score': 0.1,
+                'prediction_class': 'NEUTRAL',
+                'reasoning': 'Error in prediction - defaulting to neutral',
+                'prediction_method': 'llm_few_shot_error',
+                'similar_cases_used': 0
+            }
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Make Agent Predictions
+Make Agent Predictions with LLM-based Few-Shot Learning
 
-This script makes agent predictions using the consistent thresholds
-determined during the label balancing step. It ensures that both
-ML models and domain agents use the same thresholds for classification.
+This script makes agent predictions using GPT-4o-mini with few-shot learning
+from similar historical cases. It extracts features first, then uses LLM
+to make predictions based on those features and historical patterns.
 
 Usage:
     python make_agent_predictions.py --setup-list data/prediction_setups.txt
@@ -24,6 +24,12 @@ from datetime import datetime
 # Import threshold manager
 from threshold_manager import ThresholdManager
 
+# Import agent classes for LLM predictions
+from agents.fundamentals.enhanced_fundamentals_agent_duckdb import EnhancedFundamentalsAgentDuckDB
+from agents.news.enhanced_news_agent_duckdb import EnhancedNewsAgentDuckDB
+from agents.analyst_recommendations.enhanced_analyst_recommendations_agent_duckdb import EnhancedAnalystRecommendationsAgentDuckDB
+from agents.userposts.enhanced_userposts_agent_complete import EnhancedUserPostsAgentComplete
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class AgentPredictionMaker:
-    """Class for making agent predictions with consistent thresholds"""
+    """Class for making agent predictions with LLM-based few-shot learning"""
     
     def __init__(
         self,
@@ -48,6 +54,28 @@ class AgentPredictionMaker:
         """
         self.db_path = db_path
         self.threshold_manager = ThresholdManager(threshold_file=threshold_file)
+        
+        # Initialize LLM agents for predictions
+        logger.info("Initializing LLM agents for predictions...")
+        self.agents = {
+            'fundamentals': EnhancedFundamentalsAgentDuckDB(
+                db_path=db_path, 
+                mode="prediction"
+            ),
+            'news': EnhancedNewsAgentDuckDB(
+                db_path=db_path,
+                mode="prediction"
+            ),
+            'analyst_recommendations': EnhancedAnalystRecommendationsAgentDuckDB(
+                db_path=db_path,
+                mode="prediction"
+            ),
+            'userposts': EnhancedUserPostsAgentComplete(
+                db_path=db_path,
+                mode="prediction"
+            )
+        }
+        logger.info("LLM agents initialized successfully")
     
     def load_setup_ids(self, setup_list_file: str) -> List[str]:
         """
@@ -67,129 +95,104 @@ class AgentPredictionMaker:
     
     def get_domain_predictions(self, setup_ids: List[str], domain: str) -> pd.DataFrame:
         """
-        Get predictions from a specific domain with explicit outperformance_10d predictions
+        Get LLM-based predictions from a specific domain
         
         Args:
             setup_ids: List of setup IDs
             domain: Domain name ('news', 'fundamentals', 'analyst_recommendations', 'userposts')
             
         Returns:
-            DataFrame with domain predictions including outperformance_10d
+            DataFrame with LLM predictions including outperformance_10d
         """
+        logger.info(f"Making LLM predictions for {len(setup_ids)} setups in {domain} domain")
+        
+        predictions = []
+        agent = self.agents[domain]
+        
         conn = None
         try:
             conn = duckdb.connect(self.db_path)
             
-            # Different queries based on domain - enhanced to better predict outperformance_10d
-            if domain == 'news':
-                query = """
-                    SELECT 
-                        setup_id,
-                        sentiment_score_financial_results as positive_signal_strength,
-                        CASE WHEN profit_warning_present = 'Yes' THEN 1.0 ELSE 0.0 END as negative_risk_score,
-                        -- Explicit outperformance prediction based on news sentiment
-                        CASE 
-                            WHEN sentiment_score_financial_results > 0.6 THEN sentiment_score_financial_results * 10
-                            WHEN sentiment_score_financial_results < -0.3 THEN sentiment_score_financial_results * 8
-                            ELSE sentiment_score_financial_results * 5
-                        END as weighted_avg_outperformance
-                    FROM news_features
-                    WHERE setup_id = ANY(?)
-                """
-            elif domain == 'fundamentals':
-                query = """
-                    SELECT 
-                        setup_id,
-                        COALESCE(roa, 0) + COALESCE(roe, 0) + COALESCE(revenue_growth, 0) as positive_signal_strength,
-                        CASE WHEN debt_to_equity > 1.0 THEN debt_to_equity ELSE 0.0 END as negative_risk_score,
-                        -- Explicit outperformance prediction based on financial metrics
-                        (COALESCE(roa, 0) * 2 + COALESCE(roe, 0) * 2 + 
-                         COALESCE(revenue_growth, 0) * 3 - 
-                         COALESCE(debt_to_equity, 0) * 0.5 +
-                         COALESCE(current_ratio, 1) * 0.5 +
-                         COALESCE(gross_margin, 0) * 2) as weighted_avg_outperformance
-                    FROM fundamentals_features
-                    WHERE setup_id = ANY(?)
-                """
-            elif domain == 'analyst_recommendations':
-                query = """
-                    SELECT 
-                        setup_id,
-                        analyst_conviction_score as positive_signal_strength,
-                        CASE WHEN recent_downgrades > 0 THEN recent_downgrades ELSE 0.0 END as negative_risk_score,
-                        -- Explicit outperformance prediction based on analyst recommendations
-                        (analyst_conviction_score * 7.5 - 
-                         COALESCE(recent_downgrades, 0) * 2.5 + 
-                         COALESCE(recent_upgrades, 0) * 2.5) as weighted_avg_outperformance
-                    FROM analyst_recommendations_features
-                    WHERE setup_id = ANY(?)
-                """
-            elif domain == 'userposts':
-                query = """
-                    SELECT 
-                        setup_id,
-                        community_sentiment_score as positive_signal_strength,
-                        CASE WHEN contrarian_signal > 0 THEN CAST(contrarian_signal AS DOUBLE) ELSE 0.0 END as negative_risk_score,
-                        -- Explicit outperformance prediction based on user posts
-                        (avg_sentiment * 4 + 
-                         community_sentiment_score * 3 - 
-                         COALESCE(CAST(contrarian_signal AS DOUBLE), 0) * 2) as weighted_avg_outperformance
-                    FROM userposts_features
-                    WHERE setup_id = ANY(?)
-                """
-            else:
-                logger.error(f"Unknown domain: {domain}")
-                return pd.DataFrame(columns=['setup_id', 'predicted_label', 'predicted_outperformance', 'confidence_score'])
-            
-            domain_df = conn.execute(query, [setup_ids]).df()
-            
-            if len(domain_df) == 0:
-                logger.warning(f"No predictions found for domain: {domain}")
-                return pd.DataFrame(columns=['setup_id', 'predicted_label', 'predicted_outperformance', 'confidence_score'])
-            
-            # Load thresholds
-            neg_threshold, pos_threshold = self.threshold_manager.get_thresholds_for_prediction()
-            
-            # Calculate confidence score - enhanced to be more meaningful
-            domain_df['confidence_score'] = domain_df.apply(
-                lambda row: min(0.95, max(0.33, 
-                    (abs(row['positive_signal_strength']) + abs(row['negative_risk_score'])) / 2 + 0.3)),
-                axis=1
-            )
-            
-            # Calculate predicted label using consistent thresholds
-            domain_df['predicted_label'] = domain_df['weighted_avg_outperformance'].apply(
-                lambda x: 1 if x >= pos_threshold else (-1 if x <= neg_threshold else 0)
-            )
-            
-            # Normalize outperformance predictions to realistic range (-15% to +15%)
-            domain_df['weighted_avg_outperformance'] = domain_df['weighted_avg_outperformance'].clip(-15, 15)
-            
-            # Select relevant columns
-            result_df = domain_df[['setup_id', 'predicted_label', 'weighted_avg_outperformance', 'confidence_score']]
-            result_df = result_df.rename(columns={'weighted_avg_outperformance': 'predicted_outperformance'})
-            
-            logger.info(f"Found {len(result_df)} predictions for domain: {domain}")
-            
-            # Log class distribution and outperformance stats
-            if len(result_df) > 0:
-                class_counts = result_df['predicted_label'].value_counts()
-                logger.info(f"Class distribution for domain {domain}:")
-                for cls, count in class_counts.items():
-                    logger.info(f"- Class {cls}: {count} ({count/len(result_df):.1%})")
-                
-                # Log outperformance stats
-                logger.info(f"Outperformance stats for domain {domain}:")
-                logger.info(f"- Mean: {result_df['predicted_outperformance'].mean():.2f}%")
-                logger.info(f"- Min: {result_df['predicted_outperformance'].min():.2f}%")
-                logger.info(f"- Max: {result_df['predicted_outperformance'].max():.2f}%")
-                logger.info(f"- Median: {result_df['predicted_outperformance'].median():.2f}%")
-            
-            return result_df
-        
+            # Get features for each setup and make LLM predictions
+            for setup_id in setup_ids:
+                try:
+                    # Get extracted features for this setup
+                    features = self._get_setup_features(conn, setup_id, domain)
+                    
+                    if features:
+                        # Make LLM prediction using features and similar cases
+                        prediction_result = agent.predict_with_llm(setup_id, features)
+                        
+                        # Convert to format expected by downstream processing
+                        prediction_data = {
+                            'setup_id': setup_id,
+                            'weighted_avg_outperformance': prediction_result.get('predicted_outperformance_10d', 0.0),
+                            'confidence_score': prediction_result.get('confidence_score', 0.1),
+                            'prediction_class': prediction_result.get('prediction_class', 'NEUTRAL'),
+                            'reasoning': prediction_result.get('reasoning', ''),
+                            'prediction_method': prediction_result.get('prediction_method', 'llm_few_shot'),
+                            'similar_cases_used': prediction_result.get('similar_cases_used', 0)
+                        }
+                        predictions.append(prediction_data)
+                    else:
+                        logger.warning(f"No features found for {setup_id} in {domain}")
+                        # Add default prediction
+                        predictions.append({
+                            'setup_id': setup_id,
+                            'weighted_avg_outperformance': 0.0,
+                            'confidence_score': 0.1,
+                            'prediction_class': 'NEUTRAL',
+                            'reasoning': 'No features available',
+                            'prediction_method': 'default',
+                            'similar_cases_used': 0
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error making prediction for {setup_id} in {domain}: {e}")
+                    # Add error prediction
+                    predictions.append({
+                        'setup_id': setup_id,
+                        'weighted_avg_outperformance': 0.0,
+                        'confidence_score': 0.1,
+                        'prediction_class': 'NEUTRAL',
+                        'reasoning': f'Prediction error: {str(e)}',
+                        'prediction_method': 'error',
+                        'similar_cases_used': 0
+                    })
+                    
         finally:
             if conn:
                 conn.close()
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(predictions)
+        logger.info(f"Generated {len(df)} LLM predictions for {domain} domain")
+        return df
+    
+    def _get_setup_features(self, conn, setup_id: str, domain: str) -> Dict[str, Any]:
+        """Get extracted features for a setup from the appropriate domain table"""
+        try:
+            if domain == 'fundamentals':
+                query = "SELECT * FROM fundamentals_features WHERE setup_id = ?"
+            elif domain == 'news':
+                query = "SELECT * FROM news_features WHERE setup_id = ?"
+            elif domain == 'analyst_recommendations':
+                query = "SELECT * FROM analyst_recommendations_features WHERE setup_id = ?"
+            elif domain == 'userposts':
+                query = "SELECT * FROM userposts_features WHERE setup_id = ?"
+            else:
+                return {}
+                
+            result = conn.execute(query, [setup_id]).fetchone()
+            if result:
+                # Convert to dictionary
+                columns = [desc[0] for desc in conn.description]
+                return dict(zip(columns, result))
+            return {}
+            
+        except Exception as e:
+            logger.error(f"Error getting features for {setup_id} in {domain}: {e}")
+            return {}
     
     def make_ensemble_predictions(self, setup_ids: List[str]) -> pd.DataFrame:
         """
@@ -218,9 +221,28 @@ class AgentPredictionMaker:
         for domain in domains:
             if len(domain_predictions[domain]) > 0:
                 domain_df = domain_predictions[domain].copy()
+                
+                # Load thresholds for converting outperformance to labels
+                neg_threshold, pos_threshold = self.threshold_manager.get_thresholds_for_prediction()
+                
+                # Convert outperformance to predicted labels using thresholds
+                domain_df['predicted_label'] = domain_df['weighted_avg_outperformance'].apply(
+                    lambda x: 1 if x >= pos_threshold else (-1 if x <= neg_threshold else 0)
+                )
+                
+                # Select only essential columns for merging
+                merge_columns = [
+                    'setup_id',
+                    'predicted_label',
+                    'weighted_avg_outperformance', 
+                    'confidence_score'
+                ]
+                domain_df = domain_df[merge_columns]
+                
+                # Rename columns for merging
                 domain_df = domain_df.rename(columns={
                     'predicted_label': f'{domain}_predicted_label',
-                    'predicted_outperformance': f'{domain}_predicted_outperformance',
+                    'weighted_avg_outperformance': f'{domain}_predicted_outperformance',
                     'confidence_score': f'{domain}_confidence_score'
                 })
                 ensemble_df = pd.merge(ensemble_df, domain_df, on='setup_id', how='left')

@@ -834,6 +834,111 @@ Return JSON format:
         
         return prediction
 
+    def predict_with_llm(self, setup_id: str, current_features: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Make LLM-based prediction using current analyst features and similar historical cases
+        
+        Args:
+            setup_id: Current setup ID
+            current_features: Extracted analyst features for current setup
+            
+        Returns:
+            Dictionary with LLM prediction results
+        """
+        try:
+            # Create context from current analyst features
+            context = f"""Setup {setup_id} Analyst Analysis:
+- Consensus Rating: {current_features.get('consensus_rating', 3.0)}
+- Recent Upgrades: {current_features.get('recent_upgrades', 0)}
+- Recent Downgrades: {current_features.get('recent_downgrades', 0)}
+- Analyst Conviction: {current_features.get('analyst_conviction_score', 0.5)}
+- Momentum: {current_features.get('recommendation_momentum', 'stable')}
+- Summary: {current_features.get('synthetic_analyst_summary', 'N/A')}"""
+            
+            # Get similar training examples for prediction context
+            similar_cases = self.find_similar_training_embeddings(context, limit=5)
+            
+            # Create prediction prompt with few-shot examples
+            examples_section = ""
+            if similar_cases:
+                examples_section = "\n\n**HISTORICAL EXAMPLES TO LEARN FROM:**\n"
+                for i, case in enumerate(similar_cases[:3], 1):
+                    outcome = case.get('outperformance_10d', 0.0)
+                    case_text = case.get('text_content', case.get('chunk_text', ''))[:150]
+                    examples_section += f"""
+Example {i}:
+Analyst Context: "{case_text}..."
+Actual Outcome: {outcome:+.1f}% outperformance vs sector (10 days)
+Result: {'POSITIVE' if outcome > 0 else 'NEGATIVE' if outcome < 0 else 'NEUTRAL'}
+"""
+                examples_section += "\nBased on these historical analyst patterns, analyze the current setup:\n"
+            
+            prediction_prompt = f"""You are an expert analyst coverage specialist making investment predictions.
+
+{examples_section}
+
+**CURRENT SETUP TO PREDICT:**
+{context}
+
+Based on the analyst analysis and historical patterns above, predict the 10-day stock outperformance vs sector.
+
+Return your prediction as JSON:
+{{
+    "predicted_outperformance_10d": <float between -15.0 and +15.0>,
+    "confidence_score": <float between 0.0 and 1.0>,
+    "prediction_class": "<POSITIVE|NEGATIVE|NEUTRAL>",
+    "reasoning": "<brief explanation of your prediction logic>"
+}}
+
+Focus on:
+- Analyst consensus and conviction levels
+- Recent rating changes momentum
+- Upgrade/downgrade patterns
+- Historical analyst accuracy patterns"""
+
+            # Make LLM prediction call
+            response = self.client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": "You are an expert analyst coverage specialist specializing in stock performance prediction. Analyze analyst data and make accurate predictions based on historical patterns."},
+                    {"role": "user", "content": prediction_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=400
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            if result_text.startswith('```json'):
+                result_text = result_text.split('```json')[1].split('```')[0].strip()
+            elif result_text.startswith('```'):
+                result_text = result_text.split('```')[1].split('```')[0].strip()
+            
+            import json
+            prediction_result = json.loads(result_text)
+            
+            # Add metadata
+            prediction_result['setup_id'] = setup_id
+            prediction_result['prediction_method'] = 'llm_few_shot'
+            prediction_result['similar_cases_used'] = len(similar_cases)
+            
+            logger.info(f"Analyst LLM prediction for {setup_id}: {prediction_result.get('predicted_outperformance_10d', 0.0):.2f}% (confidence: {prediction_result.get('confidence_score', 0.0):.2f})")
+            
+            return prediction_result
+            
+        except Exception as e:
+            logger.error(f"Error in analyst LLM prediction for {setup_id}: {e}")
+            return {
+                'setup_id': setup_id,
+                'predicted_outperformance_10d': 0.0,
+                'confidence_score': 0.1,
+                'prediction_class': 'NEUTRAL',
+                'reasoning': 'Error in prediction - defaulting to neutral',
+                'prediction_method': 'llm_few_shot_error',
+                'similar_cases_used': 0
+            }
+
     def cleanup(self):
         """Cleanup resources"""
         try:

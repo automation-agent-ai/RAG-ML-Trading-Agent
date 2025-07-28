@@ -949,6 +949,113 @@ Return ONLY the JSON object."""
         logger.info(f"Final prediction: {prediction}")
         return prediction
 
+    def predict_with_llm(self, setup_id: str, current_features: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Make LLM-based prediction using current user posts features and similar historical cases
+        
+        Args:
+            setup_id: Current setup ID
+            current_features: Extracted user posts features for current setup
+            
+        Returns:
+            Dictionary with LLM prediction results
+        """
+        try:
+            # Create context from current user posts features
+            context = f"""Setup {setup_id} Community Analysis:
+- Community Sentiment: {current_features.get('community_sentiment_score', 0.0)}
+- Bull/Bear Ratio: {current_features.get('bull_bear_ratio', 1.0)}
+- Rumor Intensity: {current_features.get('rumor_intensity', 0.0)}
+- Trusted User Sentiment: {current_features.get('trusted_user_sentiment', 0.0)}
+- Consensus Level: {current_features.get('consensus_level', 'medium')}
+- Sentiment Shift: {current_features.get('recent_sentiment_shift', 'stable')}
+- Post Summary: {current_features.get('synthetic_post', 'N/A')}"""
+            
+            # Get similar training examples for prediction context
+            similar_cases = self.find_similar_training_embeddings(context, limit=5)
+            
+            # Create prediction prompt with few-shot examples
+            examples_section = ""
+            if similar_cases:
+                examples_section = "\n\n**HISTORICAL EXAMPLES TO LEARN FROM:**\n"
+                for i, case in enumerate(similar_cases[:3], 1):
+                    outcome = case.get('outperformance_10d', 0.0)
+                    case_text = case.get('text_content', case.get('chunk_text', ''))[:150]
+                    examples_section += f"""
+Example {i}:
+Community Context: "{case_text}..."
+Actual Outcome: {outcome:+.1f}% outperformance vs sector (10 days)
+Result: {'POSITIVE' if outcome > 0 else 'NEGATIVE' if outcome < 0 else 'NEUTRAL'}
+"""
+                examples_section += "\nBased on these historical community patterns, analyze the current setup:\n"
+            
+            prediction_prompt = f"""You are an expert community sentiment analyst making investment predictions.
+
+{examples_section}
+
+**CURRENT SETUP TO PREDICT:**
+{context}
+
+Based on the community analysis and historical patterns above, predict the 10-day stock outperformance vs sector.
+
+Return your prediction as JSON:
+{{
+    "predicted_outperformance_10d": <float between -15.0 and +15.0>,
+    "confidence_score": <float between 0.0 and 1.0>,
+    "prediction_class": "<POSITIVE|NEGATIVE|NEUTRAL>",
+    "reasoning": "<brief explanation of your prediction logic>"
+}}
+
+Focus on:
+- Community sentiment and momentum
+- Bull/bear ratio and consensus strength
+- Trusted user opinions vs general sentiment
+- Rumor intensity and market expectations
+- Historical community prediction accuracy"""
+
+            # Make LLM prediction call
+            response = self.client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": "You are an expert community sentiment analyst specializing in stock performance prediction. Analyze social sentiment data and make accurate predictions based on historical patterns."},
+                    {"role": "user", "content": prediction_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=400
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            if result_text.startswith('```json'):
+                result_text = result_text.split('```json')[1].split('```')[0].strip()
+            elif result_text.startswith('```'):
+                result_text = result_text.split('```')[1].split('```')[0].strip()
+            
+            import json
+            prediction_result = json.loads(result_text)
+            
+            # Add metadata
+            prediction_result['setup_id'] = setup_id
+            prediction_result['prediction_method'] = 'llm_few_shot'
+            prediction_result['similar_cases_used'] = len(similar_cases)
+            
+            logger.info(f"UserPosts LLM prediction for {setup_id}: {prediction_result.get('predicted_outperformance_10d', 0.0):.2f}% (confidence: {prediction_result.get('confidence_score', 0.0):.2f})")
+            
+            return prediction_result
+            
+        except Exception as e:
+            logger.error(f"Error in UserPosts LLM prediction for {setup_id}: {e}")
+            return {
+                'setup_id': setup_id,
+                'predicted_outperformance_10d': 0.0,
+                'confidence_score': 0.1,
+                'prediction_class': 'NEUTRAL',
+                'reasoning': 'Error in prediction - defaulting to neutral',
+                'prediction_method': 'llm_few_shot_error',
+                'similar_cases_used': 0
+            }
+
 def main():
     """Main function for testing"""
     import sys
