@@ -22,56 +22,56 @@ The optimized workflow is designed to:
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │                 │     │                 │     │                 │
-│  Select Setups  │────▶│ Preserve Data   │────▶│ Remove from     │
-│  for Prediction │     │                 │     │ Training        │
-│                 │     │                 │     │                 │
+│  1. Select      │────▶│  2. Preserve    │────▶│  3. Remove from │
+│  Setups for     │     │     Data        │     │     Training    │
+│  Prediction     │     │                 │     │                 │
 └─────────────────┘     └─────────────────┘     └────────┬────────┘
                                                          │
                                                          ▼
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │                 │     │                 │     │                 │
-│  Restore Data   │◀────│ Evaluate        │◀────│ Reset Similarity│
-│  (when needed)  │     │ Predictions     │     │ Features        │
-│                 │     │                 │     │                 │
+│  16. Restore    │◀────│  15. Evaluate   │◀────│  4. Reset       │
+│  Data           │     │  Predictions    │     │  Similarity     │
+│  (when needed)  │     │                 │     │  Features       │
 └─────────────────┘     └─────────────────┘     └────────┬────────┘
                                                          │
                                                          ▼
                                                ┌─────────────────┐
                                                │                 │
-                                               │ Create          │
-                                               │ Embeddings      │
-                                               │                 │
+                                               │  5. Create      │
+                                               │  Prediction     │
+                                               │  Embeddings     │
                                                └────────┬────────┘
                                                         │
                                                         ▼
                                                ┌─────────────────┐
                                                │                 │
-                                               │ Extract ML      │
-                                               │ Features        │
+                                               │  7. Extract ML  │
+                                               │  Features       │
                                                │                 │
                                                └────────┬────────┘
                                                         │
                                                         ▼
                                                ┌─────────────────┐     ┌─────────────────┐
                                                │                 │     │                 │
-                                               │ Add Labels &    │────▶│ Balance         │
-                                               │ Balance Classes │     │ Datasets        │
-                                               │                 │     │                 │
+                                               │  8. Add Labels  │────▶│  9. Balance     │
+                                               │  & Balance      │     │  Datasets       │
+                                               │  Classes        │     │                 │
                                                └────────┬────────┘     └────────┬────────┘
                                                         │                       │
                                                         ▼                       │
                                                ┌─────────────────┐              │
                                                │                 │              │
-                                               │ Make Agent      │              │
-                                               │ Predictions     │              │
+                                               │  10. Make Agent │              │
+                                               │  Predictions    │              │
                                                │                 │              │
                                                └────────┬────────┘              │
                                                         │                       │
                                                         ▼                       ▼
                                                ┌─────────────────┐     ┌─────────────────┐
                                                │                 │     │                 │
-                                               │ Train ML        │────▶│ Generate        │
-                                               │ Models          │     │ Results Table   │
+                                               │  11. Train ML   │────▶│  12. Generate   │
+                                               │  Models         │     │  Results Table  │
                                                │                 │     │                 │
                                                └─────────────────┘     └─────────────────┘
 ```
@@ -357,9 +357,36 @@ python visualize_ensemble_results.py --input data/predictions/ensemble_predictio
 - Generates class distribution plots
 - Calculates and visualizes performance metrics
 - Creates model comparison charts
-- Outputs comprehensive performance reports
 
-### 15. Restore Data (When Needed)
+### 15. Preserve and Restore Embeddings (Optional)
+
+If you want to preserve prediction embeddings and later restore them to the training set (after labels become available):
+
+```bash
+# First, preserve prediction embeddings
+conda activate sts
+python preserve_restore_embeddings.py --action preserve --domains all --setup-list data/prediction_setups.txt
+
+# Later, once labels are available, restore embeddings to training set
+conda activate sts
+python preserve_restore_embeddings.py --action restore --domains all --setup-list data/prediction_setups.txt
+```
+
+**What it does:**
+- **Preserve action:**
+  - Extracts embeddings for prediction setups from domain-specific embedding tables
+  - Saves them to parquet files in the backup directory with timestamps
+  - This prevents data loss and allows future reuse
+
+- **Restore action:**
+  - Checks if labels are available for the preserved setup IDs
+  - Retrieves embeddings for setups with available labels
+  - Merges embeddings with labels
+  - Adds them back to the training embedding tables
+  - Updates LanceDB tables if applicable
+  - This enables continuous learning by incorporating new labeled data into the training set
+
+### 16. Restore Data (When Needed)
 
 When you're ready to return to training with the full dataset:
 
