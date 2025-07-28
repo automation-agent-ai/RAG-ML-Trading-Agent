@@ -1,0 +1,5 @@
+{
+  "neg_threshold": -0.17761747492197902,
+  "pos_threshold": 0.27061355702299633,
+  "source": "dynamic_percentile"
+}

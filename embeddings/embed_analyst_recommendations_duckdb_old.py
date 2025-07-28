@@ -24,6 +24,14 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
+# Force offline mode for model loading
+import os
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_CACHE'] = os.path.join('models', 'cache')
+os.environ['HF_HOME'] = os.path.join('models', 'hub')
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.join('models', 'sentence_transformers')
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

@@ -16,6 +16,14 @@ from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Any, Optional
 
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
+# Force offline mode for model loading
+import os
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_CACHE'] = os.path.join('models', 'cache')
+os.environ['HF_HOME'] = os.path.join('models', 'hub')
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.join('models', 'sentence_transformers')
+
 
 class BaseEmbedder:
     """Base class for all embedding pipelines"""

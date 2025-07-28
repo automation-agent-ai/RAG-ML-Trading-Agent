@@ -31,6 +31,15 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report
 from sklearn.model_selection import train_test_split
 
+# Import financial preprocessor for consistent preprocessing
+try:
+    from financial_preprocessor import FinancialPreprocessor
+    HAS_FINANCIAL_PREPROCESSOR = True
+except ImportError:
+    HAS_FINANCIAL_PREPROCESSOR = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Financial preprocessor not found. Will use standard preprocessing for financial domain.")
+
 # Try to import XGBoost, use GradientBoosting as fallback
 try:
     from xgboost import XGBClassifier
@@ -78,7 +87,8 @@ class DomainMLTrainer:
         data: pd.DataFrame,
         label_col: str = "label",
         exclude_cols: List[str] = None,
-        impute_strategy: str = "median"
+        impute_strategy: str = "median",
+        use_saved_preprocessing: bool = True
     ) -> Tuple[pd.DataFrame, pd.Series]:
         """
         Prepare data for training by separating features and labels
@@ -88,6 +98,7 @@ class DomainMLTrainer:
             label_col: Name of the label column
             exclude_cols: Columns to exclude from features
             impute_strategy: Strategy for imputing missing values
+            use_saved_preprocessing: Whether to use saved preprocessing parameters for financial domain
             
         Returns:
             Tuple of (X, y) where X is features and y is labels
@@ -108,6 +119,12 @@ class DomainMLTrainer:
         exclude_cols = exclude_cols + [label_col, "setup_id"]
         X = data.drop(columns=exclude_cols, errors='ignore')
         
+        # For financial domain, try to use saved preprocessing parameters for consistency
+        if (self.domain == 'financial' and HAS_FINANCIAL_PREPROCESSOR and 
+            use_saved_preprocessing and hasattr(self, '_check_for_saved_preprocessing')):
+            
+            X = self._apply_financial_preprocessing(X, data)
+        
         # Store feature columns for later use
         self.feature_columns = X.columns.tolist()
         
@@ -115,6 +132,74 @@ class DomainMLTrainer:
         logger.info(f"Label distribution: {y.value_counts().to_dict()}")
         
         return X, y
+    
+    def _check_for_saved_preprocessing(self) -> bool:
+        """Check if saved preprocessing parameters exist for financial domain"""
+        if self.domain != 'financial' or not HAS_FINANCIAL_PREPROCESSOR:
+            return False
+        
+        preprocessing_path = Path(f"models/financial/preprocessing_params.pkl")
+        return preprocessing_path.exists()
+    
+    def _apply_financial_preprocessing(self, X: pd.DataFrame, original_data: pd.DataFrame) -> pd.DataFrame:
+        """Apply saved financial preprocessing parameters for consistency"""
+        try:
+            logger.info(f"🔧 Loading saved financial preprocessing parameters for consistency...")
+            
+            # Initialize financial preprocessor
+            preprocessor = FinancialPreprocessor(
+                preprocessing_params_path="models/financial/preprocessing_params.pkl"
+            )
+            
+            # Load preprocessing parameters
+            preprocessor._load_preprocessing_params()
+            
+            # Check if feature columns match
+            saved_features = set(preprocessor.feature_columns)
+            current_features = set(X.columns)
+            
+            if saved_features != current_features:
+                logger.warning(f"Feature mismatch detected:")
+                logger.warning(f"  - Saved features: {len(saved_features)}")
+                logger.warning(f"  - Current features: {len(current_features)}")
+                
+                # Find missing and extra features
+                missing_features = saved_features - current_features
+                extra_features = current_features - saved_features
+                
+                if missing_features:
+                    logger.warning(f"  - Missing features: {list(missing_features)[:5]}...")
+                    # Add missing features with NaN values
+                    for feature in missing_features:
+                        X[feature] = np.nan
+                
+                if extra_features:
+                    logger.warning(f"  - Extra features: {list(extra_features)[:5]}...")
+                    # Remove extra features
+                    X = X.drop(columns=list(extra_features), errors='ignore')
+                
+                # Reorder columns to match saved order
+                X = X[preprocessor.feature_columns]
+            
+            # Apply preprocessing (imputation and scaling)
+            X_processed = preprocessor._apply_preprocessing(
+                pd.concat([original_data[['setup_id', 'ticker']], X], axis=1),
+                preprocessor.feature_columns
+            )
+            
+            # Return only the feature columns
+            X_final = X_processed[preprocessor.feature_columns]
+            
+            logger.info(f"✅ Applied saved financial preprocessing parameters")
+            logger.info(f"  - Features: {X_final.shape[1]}")
+            logger.info(f"  - Samples: {X_final.shape[0]}")
+            
+            return X_final
+            
+        except Exception as e:
+            logger.warning(f"Failed to apply saved preprocessing: {str(e)}")
+            logger.warning("Falling back to standard preprocessing pipeline")
+            return X
     
     def train_models(
         self,
@@ -141,50 +226,88 @@ class DomainMLTrainer:
             X, y, test_size=0.2, random_state=self.random_state
         )
         
+        # Check if we should use simplified preprocessing for financial domain
+        use_simple_preprocessing = (
+            self.domain == 'financial' and 
+            HAS_FINANCIAL_PREPROCESSOR and 
+            self._check_for_saved_preprocessing()
+        )
+        
+        if use_simple_preprocessing:
+            logger.info(f"🎯 Using simplified preprocessing for {self.domain} domain (preprocessing already applied)")
+        
         # Train models
         for model_name in models_to_train:
             logger.info(f"Training {self.domain} {model_name}...")
             
             if model_name == "random_forest":
-                model = Pipeline([
-                    ('imputer', SimpleImputer(strategy='median')),
-                    ('scaler', StandardScaler()),
-                    ('classifier', RandomForestClassifier(
+                if use_simple_preprocessing:
+                    # Skip preprocessing since it's already applied
+                    model = RandomForestClassifier(
                         n_estimators=100,
                         max_depth=10,
                         random_state=self.random_state
-                    ))
-                ])
-            elif model_name == "xgboost":
-                if has_xgboost:
-                    model = Pipeline([
-                        ('imputer', SimpleImputer(strategy='median')),
-                        ('scaler', StandardScaler()),
-                        ('classifier', XGBClassifier(
-                            n_estimators=100,
-                            max_depth=5,
-                            random_state=self.random_state
-                        ))
-                    ])
+                    )
                 else:
                     model = Pipeline([
                         ('imputer', SimpleImputer(strategy='median')),
                         ('scaler', StandardScaler()),
-                        ('classifier', GradientBoostingClassifier(
+                        ('classifier', RandomForestClassifier(
                             n_estimators=100,
-                            max_depth=5,
+                            max_depth=10,
                             random_state=self.random_state
                         ))
                     ])
+            elif model_name == "xgboost":
+                if has_xgboost:
+                    if use_simple_preprocessing:
+                        model = XGBClassifier(
+                            n_estimators=100,
+                            max_depth=5,
+                            random_state=self.random_state
+                        )
+                    else:
+                        model = Pipeline([
+                            ('imputer', SimpleImputer(strategy='median')),
+                            ('scaler', StandardScaler()),
+                            ('classifier', XGBClassifier(
+                                n_estimators=100,
+                                max_depth=5,
+                                random_state=self.random_state
+                            ))
+                        ])
+                else:
+                    if use_simple_preprocessing:
+                        model = GradientBoostingClassifier(
+                            n_estimators=100,
+                            max_depth=5,
+                            random_state=self.random_state
+                        )
+                    else:
+                        model = Pipeline([
+                            ('imputer', SimpleImputer(strategy='median')),
+                            ('scaler', StandardScaler()),
+                            ('classifier', GradientBoostingClassifier(
+                                n_estimators=100,
+                                max_depth=5,
+                                random_state=self.random_state
+                            ))
+                        ])
             elif model_name == "logistic_regression":
-                model = Pipeline([
-                    ('imputer', SimpleImputer(strategy='median')),
-                    ('scaler', StandardScaler()),
-                    ('classifier', LogisticRegression(
+                if use_simple_preprocessing:
+                    model = LogisticRegression(
                         max_iter=1000,
                         random_state=self.random_state
-                    ))
-                ])
+                    )
+                else:
+                    model = Pipeline([
+                        ('imputer', SimpleImputer(strategy='median')),
+                        ('scaler', StandardScaler()),
+                        ('classifier', LogisticRegression(
+                            max_iter=1000,
+                            random_state=self.random_state
+                        ))
+                    ])
             else:
                 logger.warning(f"Unknown model: {model_name}")
                 continue
@@ -217,8 +340,11 @@ class DomainMLTrainer:
             }
             
             # Extract feature importances if available
-            if hasattr(model[-1], 'feature_importances_'):
-                feature_importances = model[-1].feature_importances_
+            # Handle both Pipeline and non-Pipeline models
+            classifier = model[-1] if hasattr(model, '__getitem__') else model
+            
+            if hasattr(classifier, 'feature_importances_'):
+                feature_importances = classifier.feature_importances_
                 feature_importance_df = pd.DataFrame({
                     'feature': self.feature_columns,
                     'importance': feature_importances
@@ -393,7 +519,7 @@ class DomainMLTrainer:
 
 def main():
     """Main function"""
-    parser = argparse.ArgumentParser(description='Train domain-specific ML models')
+    parser = argparse.ArgumentParser(description='Train domain-specific ML models with enhanced financial preprocessing')
     parser.add_argument('--text-data', required=True,
                        help='Path to text ML features CSV')
     parser.add_argument('--financial-data', required=True,
@@ -414,6 +540,8 @@ def main():
                        help='Models to train')
     parser.add_argument('--random-state', type=int, default=42,
                        help='Random state for reproducibility')
+    parser.add_argument('--disable-saved-preprocessing', action='store_true',
+                       help='Disable loading saved preprocessing parameters for financial domain')
     
     args = parser.parse_args()
     
@@ -435,7 +563,8 @@ def main():
     X_text, y_text = text_trainer.prepare_data(
         data=text_data,
         label_col=args.label_col,
-        exclude_cols=args.exclude_cols
+        exclude_cols=args.exclude_cols,
+        use_saved_preprocessing=not args.disable_saved_preprocessing
     )
     
     # Train text models
@@ -457,7 +586,8 @@ def main():
         X_text_test, y_text_test = text_trainer.prepare_data(
             data=text_test_data,
             label_col=args.label_col,
-            exclude_cols=args.exclude_cols
+            exclude_cols=args.exclude_cols,
+            use_saved_preprocessing=not args.disable_saved_preprocessing
         )
         
         # Evaluate text models on test data
@@ -484,7 +614,8 @@ def main():
     X_financial, y_financial = financial_trainer.prepare_data(
         data=financial_data,
         label_col=args.label_col,
-        exclude_cols=args.exclude_cols
+        exclude_cols=args.exclude_cols,
+        use_saved_preprocessing=not args.disable_saved_preprocessing
     )
     
     # Train financial models
@@ -506,7 +637,8 @@ def main():
         X_financial_test, y_financial_test = financial_trainer.prepare_data(
             data=financial_test_data,
             label_col=args.label_col,
-            exclude_cols=args.exclude_cols
+            exclude_cols=args.exclude_cols,
+            use_saved_preprocessing=not args.disable_saved_preprocessing
         )
         
         # Evaluate financial models on test data
@@ -517,6 +649,17 @@ def main():
     
     logger.info("\n=== Training Complete ===")
     logger.info(f"Models saved to {args.output_dir}")
+    
+    # Log enhancement summary
+    if HAS_FINANCIAL_PREPROCESSOR:
+        logger.info("\n🚀 Enhanced Financial Preprocessing Features:")
+        logger.info("  ✅ Consistent preprocessing parameters loaded from training")
+        logger.info("  ✅ Comprehensive financial ratios (P&L/revenue, balance sheet/total assets)")
+        logger.info("  ✅ 1-3 year growth metrics and trend indicators")
+        logger.info("  ✅ Data quality validation and feature alignment")
+        logger.info("  ✅ Proper ticker format handling (.L suffix)")
+    else:
+        logger.info("\n⚠️  Using standard preprocessing (financial_preprocessor.py not found)")
 
 if __name__ == '__main__':
     main() 

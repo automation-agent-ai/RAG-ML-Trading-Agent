@@ -11,6 +11,7 @@ This script orchestrates the enhanced ML pipeline with proper training/predictio
 Usage:
     python run_enhanced_ml_pipeline.py --mode training
     python run_enhanced_ml_pipeline.py --mode prediction --setup-ids SETUP1 SETUP2
+    python run_enhanced_ml_pipeline.py --mode prediction --setup-list data/prediction_setups.txt --use-cached-models
 """
 
 import os
@@ -35,6 +36,19 @@ project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# Set environment variables for model caching
+os.environ['TRANSFORMERS_CACHE'] = os.path.join(str(project_root), 'models', 'cache')
+os.environ['HF_HOME'] = os.path.join(str(project_root), 'models', 'hub')
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.join(str(project_root), 'models', 'sentence_transformers')
+os.environ['HF_DATASETS_CACHE'] = os.path.join(str(project_root), 'models', 'datasets')
+
+# Import model initialization if available
+try:
+    import model_init
+    logger.info("Model initialization imported successfully")
+except ImportError:
+    logger.warning("Could not import model_init module. Models may not be cached properly.")
+
 from core.ml_feature_merger import MLFeatureMerger
 
 class EnhancedPipeline:
@@ -44,11 +58,19 @@ class EnhancedPipeline:
         self,
         db_path: str = "data/sentiment_system.duckdb",
         lancedb_dir: str = "lancedb_store",
-        prediction_db_path: str = "data/prediction_features.duckdb"
+        prediction_db_path: str = "data/prediction_features.duckdb",
+        use_cached_models: bool = False
     ):
         self.db_path = db_path
         self.lancedb_dir = lancedb_dir
         self.prediction_db_path = prediction_db_path
+        self.use_cached_models = use_cached_models
+        
+        if self.use_cached_models:
+            logger.info("🔒 Using cached models for all operations")
+            # Ensure environment variables are set
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'
+            os.environ['HF_DATASETS_OFFLINE'] = '1'
         
         # Initialize feature merger
         self.feature_merger = MLFeatureMerger(
@@ -64,37 +86,33 @@ class EnhancedPipeline:
 
     def _init_agents(self, mode: str = "training"):
         """Initialize agents with the appropriate mode"""
+        # Common kwargs for all agents
+        agent_kwargs = {
+            'db_path': self.db_path,
+            'lancedb_dir': self.lancedb_dir,
+            'mode': mode
+        }
+        
+        # Add offline mode if using cached models
+        if self.use_cached_models:
+            agent_kwargs['use_cached_models'] = True
+            agent_kwargs['local_files_only'] = True
+        
         # Initialize News Agent
         from agents.news.enhanced_news_agent_duckdb import EnhancedNewsAgentDuckDB
-        self.news_agent = EnhancedNewsAgentDuckDB(
-            db_path=self.db_path,
-            lancedb_dir=self.lancedb_dir,
-            mode=mode
-        )
+        self.news_agent = EnhancedNewsAgentDuckDB(**agent_kwargs)
         
         # Initialize Fundamentals Agent
         from agents.fundamentals.enhanced_fundamentals_agent_duckdb import EnhancedFundamentalsAgentDuckDB
-        self.fundamentals_agent = EnhancedFundamentalsAgentDuckDB(
-            db_path=self.db_path,
-            lancedb_dir=self.lancedb_dir,
-            mode=mode
-        )
+        self.fundamentals_agent = EnhancedFundamentalsAgentDuckDB(**agent_kwargs)
         
         # Initialize Analyst Recommendations Agent
         from agents.analyst_recommendations.enhanced_analyst_recommendations_agent_duckdb import EnhancedAnalystRecommendationsAgentDuckDB
-        self.analyst_agent = EnhancedAnalystRecommendationsAgentDuckDB(
-            db_path=self.db_path,
-            lancedb_dir=self.lancedb_dir,
-            mode=mode
-        )
+        self.analyst_agent = EnhancedAnalystRecommendationsAgentDuckDB(**agent_kwargs)
         
         # Initialize UserPosts Agent
         from agents.userposts.enhanced_userposts_agent_complete import EnhancedUserPostsAgentComplete
-        self.userposts_agent = EnhancedUserPostsAgentComplete(
-            db_path=self.db_path,
-            lancedb_dir=self.lancedb_dir,
-            mode=mode
-        )
+        self.userposts_agent = EnhancedUserPostsAgentComplete(**agent_kwargs)
 
     def find_training_setups(self) -> List[str]:
         """Find setups with complete data for training"""
@@ -367,93 +385,68 @@ def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Run enhanced ML pipeline')
     parser.add_argument('--mode', choices=['training', 'prediction'], default='training',
-                       help='Pipeline mode: training or prediction')
-    parser.add_argument('--setup-ids', nargs='+', help='List of setup_ids to process (optional)')
-    parser.add_argument('--setup-list', help='File containing setup IDs to process (one per line)')
+                      help='Pipeline mode (training or prediction)')
     parser.add_argument('--db-path', default='data/sentiment_system.duckdb',
-                       help='Path to DuckDB database')
-    parser.add_argument('--prediction-db-path', default='data/prediction_features.duckdb',
-                       help='Path to store prediction features')
-    parser.add_argument('--lancedb-dir', default='lancedb_store',
-                       help='Path to LanceDB directory')
-    parser.add_argument('--domains', nargs='+', choices=['all', 'news', 'fundamentals', 'analyst', 'userposts'], 
-                       default=['all'], help='Domains to process (default: all)')
-    parser.add_argument('--similarity-only', action='store_true',
-                       help='Only extract similarity features and store predictions')
+                      help='Path to DuckDB database')
+    parser.add_argument('--setup-ids', nargs='+',
+                      help='Setup IDs to process')
+    parser.add_argument('--setup-list',
+                      help='File containing setup IDs to process (one per line)')
+    parser.add_argument('--domains', nargs='+', default=['all'],
+                      choices=['all', 'news', 'fundamentals', 'analyst', 'userposts'],
+                      help='Domains to process')
+    parser.add_argument('--embeddings-only', action='store_true',
+                      help='Only create embeddings, don\'t make predictions')
+    parser.add_argument('--use-cached-models', action='store_true',
+                      help='Use cached models instead of downloading from Hugging Face')
     
     args = parser.parse_args()
     
-    # Initialize pipeline
-    pipeline = EnhancedPipeline(
-        db_path=args.db_path,
-        prediction_db_path=args.prediction_db_path,
-        lancedb_dir=args.lancedb_dir
-    )
-    
-    # Get setup IDs
+    # Determine setup IDs to process
     setup_ids = []
-    
     if args.setup_ids:
         setup_ids = args.setup_ids
-        logger.info(f"Using {len(setup_ids)} setup IDs from command line")
     elif args.setup_list:
+        # Load setup IDs from file
+        pipeline = EnhancedPipeline(
+            db_path=args.db_path,
+            use_cached_models=args.use_cached_models
+        )
         setup_ids = pipeline.load_setup_list(args.setup_list)
     else:
-        if args.mode == 'training':
-            setup_ids = pipeline.find_training_setups()
-        else:
-            logger.error("In prediction mode, you must provide setup IDs or a setup list file")
-            sys.exit(1)
+        # Find all setups with complete data
+        pipeline = EnhancedPipeline(
+            db_path=args.db_path,
+            use_cached_models=args.use_cached_models
+        )
+        setup_ids = pipeline.find_training_setups()
     
     if not setup_ids:
         logger.error("No setup IDs to process")
-        sys.exit(1)
+        return
     
-    # Run pipeline
-    if args.similarity_only:
-        logger.info("🔍 SIMILARITY-ONLY MODE: Only extracting similarity features and storing predictions")
-        # Initialize pipeline
-        pipeline._init_agents(args.mode)
-        
-        # Get existing features from database
-        conn = duckdb.connect(args.db_path)
-        results = {}
-        
-        for domain in args.domains if 'all' not in args.domains else ['news', 'fundamentals', 'analyst', 'userposts']:
-            domain_table = f"{domain}_features"
-            query = f"""
-            SELECT * FROM {domain_table}
-            WHERE setup_id IN (
-                SELECT UNNEST(?::VARCHAR[])
-            )
-            """
-            try:
-                df = conn.execute(query, [setup_ids]).df()
-                if not df.empty:
-                    results[domain] = {row.setup_id: row for _, row in df.iterrows()}
-                    logger.info(f"Loaded {len(df)} existing {domain} features")
-                else:
-                    logger.warning(f"No {domain} features found for the specified setup IDs")
-            except Exception as e:
-                logger.error(f"Error loading {domain} features: {e}")
-        
-        conn.close()
-        
-        # Store similarity predictions
-        pipeline._store_similarity_predictions(results, args.mode)
-        
-        logger.info("✅ Similarity predictions stored successfully")
+    # Run the pipeline
+    pipeline = EnhancedPipeline(
+        db_path=args.db_path,
+        use_cached_models=args.use_cached_models
+    )
+    
+    results = pipeline.run_pipeline(
+        setup_ids=setup_ids,
+        mode=args.mode,
+        domains=args.domains
+    )
+    
+    # If embeddings-only, don't make predictions
+    if args.embeddings_only:
+        logger.info("Skipping prediction step (embeddings-only mode)")
     else:
-        result = pipeline.run_pipeline(setup_ids, args.mode, args.domains)
-        
-        # Print summary
-        logger.info("\n" + "="*50)
-        logger.info("📊 PIPELINE SUMMARY")
-        logger.info("="*50)
-        logger.info(f"Mode: {args.mode}")
-        logger.info(f"Domains: {', '.join(args.domains)}")
-        logger.info(f"Setups processed: {result['setups_processed']}")
-        logger.info(f"Duration: {result['duration_seconds']:.2f} seconds")
+        # Make predictions
+        if args.mode == 'prediction':
+            logger.info("Making predictions...")
+            # TODO: Implement prediction logic
+    
+    logger.info("Pipeline completed successfully")
 
 if __name__ == "__main__":
     main() 

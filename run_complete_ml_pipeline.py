@@ -458,6 +458,21 @@ class CompletePipeline:
             "visualizations_dir": str(self.visualizations_dir)
         }
     
+    def make_agent_predictions(self, setup_file: str) -> None:
+        """
+        Make agent predictions using consistent thresholds
+        
+        Args:
+            setup_file: Path to setup list file
+            
+        Returns:
+            None
+        """
+        logger.info("Making agent predictions with consistent thresholds")
+        agent_cmd = f"python make_agent_predictions.py --setup-list {setup_file}"
+        self.run_command(agent_cmd)
+        logger.info("Agent predictions completed using consistent thresholds")
+    
     def run_pipeline(self, mode: str = "all") -> Dict[str, Any]:
         """
         Run the complete ML pipeline
@@ -522,6 +537,11 @@ class CompletePipeline:
             else:
                 logger.warning("Missing labeled files, skipping dataset balancing")
                 return results
+            
+            # Make agent predictions using consistent thresholds
+            # This is moved here to ensure it uses the same thresholds as the ML models
+            self.make_agent_predictions(setup_files["prediction_setups"])
+            logger.info("Agent predictions made with consistent thresholds")
             
             # Train models
             model_dirs = self.train_models(balanced_files)

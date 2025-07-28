@@ -118,6 +118,19 @@ class LabelAdder:
                     logger.info(f"- Negative threshold (33.33%): {neg_threshold:.4f}")
                     logger.info(f"- Positive threshold (66.67%): {pos_threshold:.4f}")
                     
+                    # Save thresholds for consistency across system
+                    try:
+                        from threshold_manager import ThresholdManager
+                        threshold_manager = ThresholdManager()
+                        threshold_manager.save_thresholds(
+                            neg_threshold=neg_threshold,
+                            pos_threshold=pos_threshold,
+                            source="dynamic_percentile"
+                        )
+                        logger.info("Thresholds saved for use by domain agents")
+                    except Exception as e:
+                        logger.warning(f"Failed to save thresholds: {str(e)}")
+                    
                     # Add label_class based on percentile thresholds
                     outperformance_df['label_class'] = outperformance_df['outperformance_10d'].apply(
                         lambda x: 1 if x >= pos_threshold else (-1 if x <= neg_threshold else 0)
@@ -152,15 +165,23 @@ class LabelAdder:
                 """, [setup_ids]).df()
                 
                 if len(outperformance_df) > 0:
-                    # Use the same thresholds as for training
-                    neg_threshold = -0.21  # Approximately 33.33 percentile
-                    pos_threshold = 0.28   # Approximately 66.67 percentile
+                    # Load thresholds from threshold manager for consistency
+                    try:
+                        from threshold_manager import ThresholdManager
+                        threshold_manager = ThresholdManager()
+                        neg_threshold, pos_threshold, source = threshold_manager.load_thresholds()
+                        logger.info(f"Using thresholds from {source} for prediction data:")
+                    except Exception as e:
+                        logger.warning(f"Failed to load thresholds: {str(e)}")
+                        # Fallback to default thresholds
+                        neg_threshold = -0.21  # Approximately 33.33 percentile
+                        pos_threshold = 0.28   # Approximately 66.67 percentile
+                        logger.info(f"Using default thresholds for prediction data:")
                     
-                    logger.info(f"Using fixed thresholds for prediction data:")
                     logger.info(f"- Negative threshold: {neg_threshold:.4f}")
                     logger.info(f"- Positive threshold: {pos_threshold:.4f}")
                     
-                    # Add label_class based on fixed thresholds
+                    # Add label_class based on loaded thresholds
                     outperformance_df['label_class'] = outperformance_df['outperformance_10d'].apply(
                         lambda x: 1 if x >= pos_threshold else (-1 if x <= neg_threshold else 0)
                     )

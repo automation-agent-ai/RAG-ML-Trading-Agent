@@ -13,5 +13,13 @@ data is processed by the fundamentals agent instead of the news agent.
 """
 
 from .enhanced_fundamentals_agent_duckdb import EnhancedFundamentalsAgentDuckDB
+# Force offline mode for model loading
+import os
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_CACHE'] = os.path.join('models', 'cache')
+os.environ['HF_HOME'] = os.path.join('models', 'hub')
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.join('models', 'sentence_transformers')
+
 
 __all__ = ['EnhancedFundamentalsAgentDuckDB'] 

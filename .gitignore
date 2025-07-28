@@ -55,6 +55,22 @@ data/results/
 data/visualizations/
 models/text/
 models/financial/
+data/leakage_analysis/
+test_output/
+data/ml_features_clean/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# Cached model files
+models/sentence_transformers/
+models/ensemble/
+models_clean/
 
 # IDE
 .idea/
@@ -73,4 +89,12 @@ logs/
 
 # Local development
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Pickle files
+*.pkl
+*.pickle
+
+# Embedding files
+*.npy
+*.npz 

@@ -39,11 +39,13 @@ if str(project_root) not in sys.path:
 from core.label_converter import LabelConverter, get_class_distribution
 
 from tools.setup_validator_duckdb import SetupValidatorDuckDB
-
-# Set environment variables for model caching
-os.environ['TRANSFORMERS_CACHE'] = 'models/cache'
-os.environ['HF_HOME'] = 'models/hub'
-os.environ['SENTENCE_TRANSFORMERS_HOME'] = 'models/sentence_transformers'
+# Force offline mode for model loading
+import os
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_CACHE'] = os.path.join('models', 'cache')
+os.environ['HF_HOME'] = os.path.join('models', 'hub')
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.join('models', 'sentence_transformers')
 
 
 # Setup logging
@@ -783,7 +785,7 @@ Return ONLY the JSON object."""
             if isinstance(query, str):
                 logger.info(f"Creating embedding for text: {query[:100]}...")
                 from sentence_transformers import SentenceTransformer
-                model = SentenceTransformer('all-MiniLM-L6-v2')
+                model = SentenceTransformer('all-MiniLM-L6-v2', cache_folder="models/sentence_transformers", local_files_only=True)
                 query = model.encode(query)
                 logger.info(f"Created embedding with shape: {query.shape}")
             

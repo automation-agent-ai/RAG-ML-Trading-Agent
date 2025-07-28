@@ -1,217 +1,200 @@
 #!/usr/bin/env python3
 """
-Enhanced News Agent with DuckDB Feature Storage and Grouped Processing
-====================================================================
+Enhanced News Agent with DuckDB Integration
 
-This agent processes RNS announcements for feature extraction with:
-- Category classification (dictionary + fuzzy matching + LLM fallback)
-- Group-level feature extraction (5 major groups)
-- Complete record processing (not top-K retrieval)
-- DuckDB storage integration
-
-Author: Enhanced News Agent
-Date: 2025-01-06
+This agent processes news data from DuckDB and extracts features using LLMs.
+It also supports similarity-based prediction using embeddings.
 """
 
-import json
-import hashlib
-import time
+# Force offline mode for model loading
+import os
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_CACHE'] = os.path.join('models', 'cache')
+os.environ['HF_HOME'] = os.path.join('models', 'hub')
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.join('models', 'sentence_transformers')
+
+import sys
 import logging
-import difflib
-from datetime import datetime
+from typing import Dict, List, Optional, Set, Tuple, Union, Any
+from datetime import datetime, timedelta
+import json
+import re
+import time
+import random
+import numpy as np
+import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
 import duckdb
 import lancedb
-import pandas as pd
-from pydantic import BaseModel, Field, ValidationError
-from sentence_transformers import SentenceTransformer
 from openai import OpenAI
-import numpy as np
-
-# Import from existing modules
-import sys
-from pathlib import Path
-import os
-
-# Import label converter
-from core.label_converter import LabelConverter, get_class_distribution
-
-# Add project root to path for proper imports
-project_root = Path(__file__).parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
-from tools.setup_validator_duckdb import SetupValidatorDuckDB
-from embeddings.embed_news_duckdb import NewsEmbeddingPipelineDuckDB
-
-# Set environment variables for model caching
-os.environ['TRANSFORMERS_CACHE'] = 'models\cache'
-os.environ['HF_HOME'] = 'models\hub'
-os.environ['SENTENCE_TRANSFORMERS_HOME'] = 'models\sentence_transformers'
-
+from pydantic import BaseModel, Field
+from sentence_transformers import SentenceTransformer
+import difflib
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
+# Add parent directory to path for imports
+parent_dir = str(Path(__file__).parent.parent.parent)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
-class NewsFeatureSchema(BaseModel):
-    """Pydantic schema for News feature extraction (matches feature_plan.md exactly)"""
-    
-    # Metadata
-    setup_id: str
-    extraction_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
-    llm_model: str = "gpt-4o-mini"
-    
-    # Financial Results group (7 features)
-    count_financial_results: int = Field(ge=0)
-    max_severity_financial_results: float = Field(ge=0.0, le=1.0)
-    avg_headline_spin_financial_results: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
-    sentiment_score_financial_results: float = Field(ge=-1.0, le=1.0)
-    profit_warning_present: bool
-    synthetic_summary_financial_results: str = Field(max_length=240)
-    cot_explanation_financial_results: str
-    
-    # Corporate Actions group (7 features)
-    count_corporate_actions: int = Field(ge=0)
-    max_severity_corporate_actions: float = Field(ge=0.0, le=1.0)
-    avg_headline_spin_corporate_actions: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
-    sentiment_score_corporate_actions: float = Field(ge=-1.0, le=1.0)
-    capital_raise_present: bool
-    synthetic_summary_corporate_actions: str = Field(max_length=240)
-    cot_explanation_corporate_actions: str
-    
-    # Governance group (7 features)
-    count_governance: int = Field(ge=0)
-    max_severity_governance: float = Field(ge=0.0, le=1.0)
-    avg_headline_spin_governance: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
-    sentiment_score_governance: float = Field(ge=-1.0, le=1.0)
-    board_change_present: bool
-    synthetic_summary_governance: str = Field(max_length=240)
-    cot_explanation_governance: str
-    
-    # Corporate Events group (8 features)
-    count_corporate_events: int = Field(ge=0)
-    max_severity_corporate_events: float = Field(ge=0.0, le=1.0)
-    avg_headline_spin_corporate_events: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
-    sentiment_score_corporate_events: float = Field(ge=-1.0, le=1.0)
-    contract_award_present: bool
-    merger_or_acquisition_present: bool
-    synthetic_summary_corporate_events: str = Field(max_length=240)
-    cot_explanation_corporate_events: str
-    
-    # Other Signals group (8 features)
-    count_other_signals: int = Field(ge=0)
-    max_severity_other_signals: float = Field(ge=0.0, le=1.0)
-    avg_headline_spin_other_signals: str = Field(pattern="^(positive|negative|neutral|uncertain)$")
-    sentiment_score_other_signals: float = Field(ge=-1.0, le=1.0)
-    broker_recommendation_present: bool
-    credit_rating_change_present: bool
-    synthetic_summary_other_signals: str = Field(max_length=240)
-    cot_explanation_other_signals: str
-    
-    # Global explanation
-    cot_explanation_news_grouped: str
+from agents.news.news_categories import (
+    FINANCIAL_RESULTS_PATTERNS,
+    CORPORATE_ACTIONS_PATTERNS,
+    GOVERNANCE_PATTERNS,
+    CORPORATE_EVENTS_PATTERNS,
+    OTHER_SIGNALS_PATTERNS,
+    CATEGORY_TO_GROUP
+)
 
+# Import setup validator
+try:
+    from tools.setup_validator_duckdb import SetupValidatorDuckDB
+except ImportError:
+    logger.warning("SetupValidatorDuckDB not found, using local implementation")
+    
+    class SetupValidatorDuckDB:
+        """Dummy implementation of SetupValidatorDuckDB"""
+        def __init__(self, db_path):
+            self.db_path = db_path
+            self.conn = duckdb.connect(db_path)
+        
+        def is_valid_setup(self, setup_id):
+            return True
+        
+        def close(self):
+            self.conn.close()
 
-# RNS Category to Group Mapping System
-RNS_CATEGORIES = [
-    "AGM Statement", "Admission of Securities", "Annual Financial Report", "Blocklisting",
-    "Board Changes", "Broker Recommendation", "Capital Reorganisation", "Change of Adviser",
-    "Change of Name", "Circular", "Company Secretary Change", "Contract Award",
-    "Contract Termination", "Conversion of Securities", "Credit Rating", "Debt Issue",
-    "Delisting", "Director Dealings", "Director/PDMR Shareholding", "Dividend Declaration",
-    "Final Results", "Interim Results", "Investment Update", "Issue of Equity",
-    "Launch of New Product", "Major Interest in Shares", "Merger & Acquisition",
-    "Notice of AGM", "Placing", "Profit Warning", "Resignation", "Results of AGM",
-    "Share Buyback", "Shareholder Meeting", "Trading Statement", "Trading Update"
-]
+# Constants
+DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+MAX_HEADLINE_LENGTH = 150
+MAX_CONTENT_LENGTH = 5000
+MIN_CONTENT_LENGTH = 10
+MAX_ITEMS_PER_GROUP = 10
+SIMILARITY_THRESHOLD = 0.7
+DEFAULT_SIMILARITY_LIMIT = 10
 
-CATEGORY_TO_GROUP = {
-    # Financial Results
-    "Final Results": "financial_results",
-    "Interim Results": "financial_results", 
-    "Profit Warning": "financial_results",
-    "Trading Statement": "financial_results",
-    "Trading Update": "financial_results",
-    "Annual Financial Report": "financial_results",
+class EnhancedNewsAgentDuckDB:
+    """Enhanced News Agent for DuckDB with embedding-based similarity search"""
     
-    # Corporate Actions
-    "Share Buyback": "corporate_actions",
-    "Issue of Equity": "corporate_actions",
-    "Dividend Declaration": "corporate_actions",
-    "Capital Reorganisation": "corporate_actions",
-    "Placing": "corporate_actions",
-    "Debt Issue": "corporate_actions",
-    "Admission of Securities": "corporate_actions",
-    "Conversion of Securities": "corporate_actions",
-    "Blocklisting": "corporate_actions",
-    "Delisting": "corporate_actions",
-    
-    # Governance
-    "Board Changes": "governance",
-    "Director Dealings": "governance",
-    "Director/PDMR Shareholding": "governance",
-    "AGM Statement": "governance",
-    "Results of AGM": "governance",
-    "Notice of AGM": "governance",
-    "Shareholder Meeting": "governance",
-    "Company Secretary Change": "governance",
-    "Resignation": "governance",
-    "Major Interest in Shares": "governance",
-    "Change of Name": "governance",
-    "Change of Adviser": "governance",
-    "Circular": "governance",
-    
-    # Corporate Events
-    "Contract Award": "corporate_events",
-    "Merger & Acquisition": "corporate_events",
-    "Launch of New Product": "corporate_events",
-    "Contract Termination": "corporate_events",
-    
-    # Other Signals
-    "Broker Recommendation": "other_signals",
-    "Credit Rating": "other_signals",
-    "Investment Update": "other_signals"
-}
-
+    def __init__(
+        self,
+        db_path: str = "data/sentiment_system.duckdb",
+        lancedb_dir: str = "lancedb_store", 
+        table_name: str = "news_embeddings",
+        llm_model: str = "gpt-4o-mini",
+        max_group_size: int = 10,  # Max items per group before chunking
+        mode: str = "training",     # Either "training" or "prediction"
+        use_cached_models: bool = False,
+        local_files_only: bool = False
+    ):
+        """
+        Initialize the Enhanced News Agent
+        
+        Args:
+            db_path: Path to DuckDB database
+            lancedb_dir: Path to LanceDB directory
+            table_name: Name of the embedding table
+            llm_model: LLM model to use
+            max_group_size: Maximum number of items per group before chunking
+            mode: Either "training" or "prediction"
+            use_cached_models: Whether to use cached models
+            local_files_only: Whether to only use local files
+        """
+        self.db_path = db_path
+        self.lancedb_dir = lancedb_dir
+        self.table_name = table_name
+        self.llm_model = llm_model
+        self.max_group_size = max_group_size
+        self.mode = mode
+        self.use_cached_models = use_cached_models
+        self.local_files_only = local_files_only
+        
+        if self.use_cached_models:
+            logger.info('Using cached models (offline mode)')
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'
+            os.environ['HF_DATASETS_OFFLINE'] = '1'
+        
+        # Initialize OpenAI client
+        self.client = OpenAI()
+        
+        # Initialize category classifier
+        self.classifier = CategoryClassifier(self.client, use_cached_models=self.use_cached_models)
+        
+        # Initialize embedding model
+        model_kwargs = {}
+        if self.use_cached_models or self.local_files_only:
+            model_kwargs['cache_folder'] = os.path.join('models', 'sentence_transformers')
+            model_kwargs['local_files_only'] = True
+            
+        self.embedding_model = SentenceTransformer(DEFAULT_EMBEDDING_MODEL, **model_kwargs)
+        
+        # Initialize setup validator
+        self.setup_validator = SetupValidatorDuckDB(db_path)
+        
+        # Connect to LanceDB
+        self._connect_to_lancedb()
+        
+        # Initialize DuckDB feature storage
+        self._init_duckdb_feature_storage()
+        
+        # Determine table name based on mode
+        if mode == "training":
+            self.embedding_table_name = f"{table_name}_training"
+        else:
+            self.embedding_table_name = f"{table_name}_prediction"
+            
+        logger.info(f"Enhanced News Agent initialized in {mode} mode with table {self.embedding_table_name}")
 
 class CategoryClassifier:
-    """Handles RNS category classification with multiple strategies"""
+    """News headline classifier for categorization"""
     
-    def __init__(self, openai_client: OpenAI):
-        self.openai_client = openai_client
-        self.cache = {}  # Simple in-memory cache for this session
-    
+    def __init__(self, openai_client: OpenAI, use_cached_models: bool = False):
+        """Initialize the category classifier"""
+        self.client = openai_client
+        self.use_cached_models = use_cached_models
+        self.classification_count = 0
+        self.category_counts = {
+            "financial_results": 0,
+            "corporate_actions": 0,
+            "governance": 0,
+            "corporate_events": 0,
+            "other_signals": 0
+        }
+        
     def classify_headline(self, headline: str) -> str:
         """
-        Classify headline to RNS category using:
-        1. Fast dictionary lookup for exact/common patterns
-        2. Fuzzy matching for near-matches  
-        3. LLM fallback for ambiguous cases
+        Classify a headline into one of the predefined categories
+        
+        Args:
+            headline: The headline to classify
+            
+        Returns:
+            Category name (one of the predefined categories)
         """
-        headline = headline.strip()
+        self.classification_count += 1
         
-        # Check cache first
-        if headline in self.cache:
-            return self.cache[headline]
-        
-        # Strategy 1: Fast dictionary lookup for common patterns
+        # Try fast pattern matching first
         category = self._fast_pattern_match(headline)
         if category:
-            self.cache[headline] = category
+            self.category_counts[category] += 1
             return category
-        
-        # Strategy 2: Fuzzy matching for near-matches
+            
+        # Try fuzzy matching next
         category = self._fuzzy_match(headline)
         if category:
-            self.cache[headline] = category
+            self.category_counts[category] += 1
             return category
-        
-        # Strategy 3: LLM fallback for ambiguous cases
+            
+        # Fall back to LLM classification
         category = self._llm_classify(headline)
-        self.cache[headline] = category
+        self.category_counts[category] += 1
         return category
     
     def _fast_pattern_match(self, headline: str) -> Optional[str]:
@@ -281,7 +264,7 @@ Headline: "{headline}"
 Respond with only the category name from the list above."""
 
         try:
-            response = self.openai_client.chat.completions.create(
+            response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
@@ -307,13 +290,70 @@ Respond with only the category name from the list above."""
             return "Investment Update"  # Default fallback
 
 
-class EnhancedNewsAgentDuckDB:
-    """
-    Enhanced News Agent with DuckDB feature storage and grouped processing
+# RNS Category to Group Mapping System
+RNS_CATEGORIES = [
+    "AGM Statement", "Admission of Securities", "Annual Financial Report", "Blocklisting",
+    "Board Changes", "Broker Recommendation", "Capital Reorganisation", "Change of Adviser",
+    "Change of Name", "Circular", "Company Secretary Change", "Contract Award",
+    "Contract Termination", "Conversion of Securities", "Credit Rating", "Debt Issue",
+    "Delisting", "Director Dealings", "Director/PDMR Shareholding", "Dividend Declaration",
+    "Final Results", "Interim Results", "Investment Update", "Issue of Equity",
+    "Launch of New Product", "Major Interest in Shares", "Merger & Acquisition",
+    "Notice of AGM", "Placing", "Profit Warning", "Resignation", "Results of AGM",
+    "Share Buyback", "Shareholder Meeting", "Trading Statement", "Trading Update"
+]
+
+CATEGORY_TO_GROUP = {
+    # Financial Results
+    "Final Results": "financial_results",
+    "Interim Results": "financial_results", 
+    "Profit Warning": "financial_results",
+    "Trading Statement": "financial_results",
+    "Trading Update": "financial_results",
+    "Annual Financial Report": "financial_results",
     
-    This agent processes ALL RNS news for each setup_id, classifies to groups,
-    and extracts group-level features using LLM calls.
-    """
+    # Corporate Actions
+    "Share Buyback": "corporate_actions",
+    "Issue of Equity": "corporate_actions",
+    "Dividend Declaration": "corporate_actions",
+    "Capital Reorganisation": "corporate_actions",
+    "Placing": "corporate_actions",
+    "Debt Issue": "corporate_actions",
+    "Admission of Securities": "corporate_actions",
+    "Conversion of Securities": "corporate_actions",
+    "Blocklisting": "corporate_actions",
+    "Delisting": "corporate_actions",
+    
+    # Governance
+    "Board Changes": "governance",
+    "Director Dealings": "governance",
+    "Director/PDMR Shareholding": "governance",
+    "AGM Statement": "governance",
+    "Results of AGM": "governance",
+    "Notice of AGM": "governance",
+    "Shareholder Meeting": "governance",
+    "Company Secretary Change": "governance",
+    "Resignation": "governance",
+    "Major Interest in Shares": "governance",
+    "Change of Name": "governance",
+    "Change of Adviser": "governance",
+    "Circular": "governance",
+    
+    # Corporate Events
+    "Contract Award": "corporate_events",
+    "Merger & Acquisition": "corporate_events",
+    "Launch of New Product": "corporate_events",
+    "Contract Termination": "corporate_events",
+    
+    # Other Signals
+    "Broker Recommendation": "other_signals",
+    "Credit Rating": "other_signals",
+    "Investment Update": "other_signals"
+}
+
+
+class EnhancedNewsAgentDuckDB:
+    """Enhanced News Agent for DuckDB with embedding-based similarity search"""
     
     def __init__(
         self,
@@ -322,18 +362,22 @@ class EnhancedNewsAgentDuckDB:
         table_name: str = "news_embeddings",
         llm_model: str = "gpt-4o-mini",
         max_group_size: int = 10,  # Max items per group before chunking
-        mode: str = "training"     # Either "training" or "prediction"
+        mode: str = "training",     # Either "training" or "prediction"
+        use_cached_models: bool = False,
+        local_files_only: bool = False
     ):
         """
-        Initialize Enhanced News Agent
+        Initialize the Enhanced News Agent
         
         Args:
             db_path: Path to DuckDB database
-            lancedb_dir: Directory for LanceDB vector store
-            table_name: LanceDB table name for news embeddings
-            llm_model: OpenAI model for feature extraction
-            max_group_size: Maximum news items per group before chunking
+            lancedb_dir: Path to LanceDB directory
+            table_name: Name of the embedding table
+            llm_model: LLM model to use
+            max_group_size: Maximum number of items per group before chunking
             mode: Either "training" or "prediction"
+            use_cached_models: Whether to use cached models
+            local_files_only: Whether to only use local files
         """
         self.db_path = db_path
         self.lancedb_dir = lancedb_dir
@@ -341,33 +385,45 @@ class EnhancedNewsAgentDuckDB:
         self.llm_model = llm_model
         self.max_group_size = max_group_size
         self.mode = mode
+        self.use_cached_models = use_cached_models
+        self.local_files_only = local_files_only
         
-        # Initialize components
-        self.setup_validator = SetupValidatorDuckDB(db_path=db_path)
-        self.openai_client = OpenAI()
-        self.classifier = CategoryClassifier(self.openai_client)
+        if self.use_cached_models:
+            logger.info('Using cached models (offline mode)')
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'
+            os.environ['HF_DATASETS_OFFLINE'] = '1'
         
-        # Connect to databases
+        # Initialize OpenAI client
+        self.client = OpenAI()
+        
+        # Initialize category classifier
+        self.classifier = CategoryClassifier(self.client, use_cached_models=self.use_cached_models)
+        
+        # Initialize embedding model
+        model_kwargs = {}
+        if self.use_cached_models or self.local_files_only:
+            model_kwargs['cache_folder'] = os.path.join('models', 'sentence_transformers')
+            model_kwargs['local_files_only'] = True
+            
+        self.embedding_model = SentenceTransformer(DEFAULT_EMBEDDING_MODEL, **model_kwargs)
+        
+        # Initialize setup validator
+        self.setup_validator = SetupValidatorDuckDB(db_path)
+        
+        # Connect to LanceDB
         self._connect_to_lancedb()
+        
+        # Initialize DuckDB feature storage
         self._init_duckdb_feature_storage()
         
-        # Initialize training table for similarity search
-        self.training_table = None
-        try:
-            if hasattr(self, 'db') and self.db:
-                # Try to open with new table name first, then fall back to old name
-                try:
-                    self.training_table = self.db.open_table("news_embeddings_training")
-                    logger.info("Connected to news_embeddings_training table for similarity search")
-                except Exception:
-                    # Fall back to old table name for backward compatibility
-                    self.training_table = self.db.open_table("news_embeddings")
-                    logger.info("Connected to news_embeddings table for similarity search (legacy name)")
-        except Exception as e:
-            logger.warning(f"Could not open training embeddings table: {e}")
-        
-        logger.info(f"Enhanced News Agent (DuckDB) initialized successfully in {mode} mode")
-    
+        # Determine table name based on mode
+        if mode == "training":
+            self.embedding_table_name = f"{table_name}_training"
+        else:
+            self.embedding_table_name = f"{table_name}_prediction"
+            
+        logger.info(f"Enhanced News Agent initialized in {mode} mode with table {self.embedding_table_name}")
+
     def _connect_to_lancedb(self):
         """Connect to LanceDB"""
         try:
@@ -663,7 +719,7 @@ class EnhancedNewsAgentDuckDB:
         try:
             # Handle text input by creating embedding
             if isinstance(query_embedding, str):
-                model = SentenceTransformer('all-MiniLM-L6-v2')
+                model = SentenceTransformer('all-MiniLM-L6-v2', cache_folder="models/sentence_transformers", local_files_only=True)
                 query_embedding = model.encode(query_embedding)
             
             # Ensure numpy array
@@ -812,7 +868,7 @@ class EnhancedNewsAgentDuckDB:
         prompt = self._load_group_prompt_template(group_name, context)
         
         try:
-            response = self.openai_client.chat.completions.create(
+            response = self.client.chat.completions.create(
                 model=self.llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
@@ -1386,6 +1442,72 @@ Extract the features as JSON:"""
             stats['group_distribution'][group] = stats['group_distribution'].get(group, 0) + 1
         
         return stats
+    
+    def create_embeddings_only(self, setup_id: str, mode: str = None) -> bool:
+        """
+        Create embeddings for a setup without making predictions
+        
+        Args:
+            setup_id: Setup ID to process
+            mode: Override the agent's mode (training or prediction)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Use provided mode or default to agent's mode
+            mode = mode or self.mode
+            
+            # Get news for the setup
+            news_df = self.retrieve_news_by_setup_id(setup_id)
+            
+            if news_df.empty:
+                logger.warning(f"No news found for setup {setup_id}")
+                return False
+            
+            # Filter out low-quality news
+            news_df = self._filter_quality_news(news_df)
+            
+            if news_df.empty:
+                logger.warning(f"No quality news found for setup {setup_id}")
+                return False
+            
+            # Classify and group news
+            grouped_news = self.classify_and_group_news(news_df)
+            
+            # Create embeddings for each group
+            for group_name, news_items in grouped_news.items():
+                for news_item in news_items:
+                    # Create text for embedding
+                    text = f"{news_item['headline']} {news_item.get('content', '')}"
+                    
+                    # Initialize embedding pipeline if needed
+                    if not hasattr(self, 'embedding_pipeline'):
+                        self.embedding_pipeline = NewsEmbeddingPipelineDuckDB(
+                            db_path=self.db_path,
+                            lancedb_dir=self.lancedb_dir,
+                            mode=mode
+                        )
+                    
+                    # Create embedding
+                    self.embedding_pipeline.create_embedding(
+                        setup_id=setup_id,
+                        text=text,
+                        metadata={
+                            'headline': news_item['headline'],
+                            'category': news_item['category'],
+                            'group': group_name,
+                            'date': news_item.get('date', ''),
+                            'source': news_item.get('source', '')
+                        }
+                    )
+            
+            logger.info(f"Created embeddings for {len(news_df)} news items for setup {setup_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error creating embeddings for setup {setup_id}: {str(e)}")
+            return False
     
     def cleanup(self):
         """Clean up resources"""

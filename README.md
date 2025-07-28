@@ -32,6 +32,16 @@ production_pipeline/
 │   ├── ml_feature_merger.py
 │   └── financial_features.py
 │
+├── 📚 docs/                               # DOCUMENTATION
+│   ├── index.md                          # Documentation index
+│   ├── OPTIMIZED_WORKFLOW.md             # Workflow guide
+│   └── ...                               # Other documentation files
+│
+├── 🧪 tests/                              # TEST FILES
+│   ├── simple_test.py                    # Simple test script
+│   ├── test_enhanced_rag.py              # RAG tests
+│   └── ...                               # Other test files
+│
 └── 🛠️ tools/                              # UTILITIES
     ├── setup_validator_duckdb.py
     └── cli_extract_*.py
@@ -92,6 +102,15 @@ merge_financial_features(
     mode='training'
 )
 ```
+
+## 📚 Documentation
+
+The project documentation has been organized into a dedicated `docs/` folder. See [docs/index.md](docs/index.md) for a complete list of available documentation.
+
+Key documentation files:
+- [Optimized Workflow](docs/OPTIMIZED_WORKFLOW.md) - Guide for the optimized ML pipeline workflow
+- [Setup Guide](docs/SETUP_GUIDE.md) - Instructions for setting up the project
+- [Quick Reference](docs/QUICK_REFERENCE.md) - Quick reference for common tasks
 
 ## 🎯 Enhanced Historical Features
 
@@ -159,6 +178,15 @@ python run_complete_ml_pipeline.py --mode prediction --setup-ids SETUP_003 SETUP
 ```bash
 cd production_pipeline/
 python run_complete_ml_pipeline.py --mode training --db-path data/sentiment_system.duckdb --lancedb-dir data/lancedb_store
+```
+
+## 🧪 Testing
+
+The project includes a comprehensive test suite in the `tests/` directory. To run tests:
+
+```bash
+cd production_pipeline/
+python -m unittest discover tests
 ```
 
 This production pipeline combines the best of both worlds: your proven original pipeline architecture with enhanced historical financial features, all organized in a clean, self-contained structure! 🎯 
