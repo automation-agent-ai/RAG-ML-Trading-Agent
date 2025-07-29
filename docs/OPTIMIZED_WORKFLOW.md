@@ -303,9 +303,9 @@ python balance_ml_datasets.py --text-train data/ml_features/text_ml_features_tra
 - Maintains consistent column order and names between datasets
 - Converts labels to a consistent format (-1, 0, 1) if needed
 
-### 10. Make Agent Predictions with Consistent Thresholds
+### 10. Make Agent Predictions with LLM-based Few-Shot Learning
 
-Make agent predictions using the same thresholds determined during the label balancing step:
+Make agent predictions using GPT-4o-mini with few-shot learning and consistent thresholds:
 
 ```bash
 conda activate sts
@@ -313,28 +313,37 @@ python make_agent_predictions.py --setup-list data/prediction_setups.txt
 ```
 
 **What it does:**
-- Loads the thresholds saved during the label balancing step
-- Uses existing domain agent features to make predictions
+- **NEW LLM-BASED SYSTEM**: Uses GPT-4o-mini to make actual predictions with few-shot learning
+- Each agent (news, fundamentals, analyst_recommendations, userposts) extracts features for current setup
+- Retrieves 5 similar historical cases from LanceDB training embeddings
+- Creates few-shot learning prompt with historical examples and their outcomes
+- Calls GPT-4o-mini to make reasoned predictions based on features and historical patterns
+- Returns structured JSON with predicted_outperformance_10d, confidence_score, and reasoning
 - Applies consistent thresholds to convert predictions to -1/0/1 format
-- Combines predictions into an ensemble prediction using confidence-weighted voting
+- Combines predictions into ensemble using confidence-weighted voting
 - Saves all predictions to the similarity_predictions table
-- Ensures that both ML models and domain agents use the same classification thresholds
 
-**Current Limitations:**
-- The agent prompts themselves have NOT been updated to explicitly predict outperformance_10d
-- This script processes existing agent features rather than generating new predictions
-- To improve agent predictions, the actual LLM prompts in agent files need to be updated
+**Key Improvements:**
+- ✅ **Real LLM Predictions**: Uses GPT-4o-mini API calls for each domain agent
+- ✅ **Few-Shot Learning**: Provides historical examples with outcomes as context
+- ✅ **Enhanced Error Handling**: Defaults to outperformance=0.0, confidence=0.34 on parsing errors
+- ✅ **Domain-Specific Prompts**: Each agent has specialized prompts for their expertise area
+- ✅ **Similarity-Based Retrieval**: Uses SentenceTransformer embeddings to find relevant cases
 
-**Note:** This step is placed after label balancing to ensure that agent predictions use the same thresholds as ML models.
+**Agent Files Updated:**
+- `agents/fundamentals/enhanced_fundamentals_agent_duckdb.py` - Financial analysis predictions
+- `agents/news/enhanced_news_agent_duckdb.py` - News sentiment predictions  
+- `agents/analyst_recommendations/enhanced_analyst_recommendations_agent_duckdb.py` - Analyst consensus predictions
+- `agents/userposts/enhanced_userposts_agent_complete.py` - Community sentiment predictions
 
-**Future Enhancement Needed:**
-To truly improve agent predictions, the LLM prompts in these files should be updated:
-- `agents/fundamentals/enhanced_fundamentals_agent_duckdb.py`
-- `agents/news/enhanced_news_agent_duckdb.py`
-- `agents/analyst_recommendations/enhanced_analyst_recommendations_agent_duckdb.py`
-- `agents/userposts/enhanced_userposts_agent_complete.py`
+**Example Output:**
+```
+News LLM prediction for EDEN_2024-10-08: -4.50% (confidence: 0.70)
+Fundamentals LLM prediction for BGO_2025-01-20: 8.50% (confidence: 0.75)
+Analyst LLM prediction for PAY_2025-02-19: 0.00% (confidence: 0.34)
+```
 
-These prompts should explicitly ask agents to predict outperformance_10d based on their domain expertise.
+**Note:** This step requires OpenAI API access and uses the same thresholds as ML models for consistent classification.
 
 ### 11. Train ML Models with 3-Stage Pipeline
 

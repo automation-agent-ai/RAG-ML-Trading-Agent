@@ -1629,6 +1629,24 @@ Outcome: Stock {'outperformed' if outcome > 0 else 'underperformed' if outcome <
             Dictionary with LLM prediction results
         """
         try:
+            # Check if there are insufficient news features - return neutral prediction immediately
+            severity_score = current_features.get('max_severity_financial_results', 0.0)
+            sentiment_score = current_features.get('sentiment_score_financial_results', 0.0) 
+            summary = current_features.get('synthetic_summary_financial_results', 'N/A')
+            
+            # If no meaningful news data, return neutral
+            if severity_score == 0.0 and sentiment_score == 0.0 and summary in ['N/A', '', None]:
+                logger.info(f"Insufficient news data for {setup_id} - returning neutral prediction")
+                return {
+                    'setup_id': setup_id,
+                    'predicted_outperformance_10d': 0.0,
+                    'confidence_score': 0.34,
+                    'prediction_class': 'NEUTRAL',
+                    'reasoning': 'Insufficient news data available - neutral prediction',
+                    'prediction_method': 'no_data_fallback',
+                    'similar_cases_used': 0
+                }
+            
             # Create context from current news features
             context = f"""Setup {setup_id} News Analysis:
 - Financial Results Sentiment: {current_features.get('sentiment_score_financial_results', 0.0)}
@@ -1654,6 +1672,8 @@ Actual Outcome: {outcome:+.1f}% outperformance vs sector (10 days)
 Result: {'POSITIVE' if outcome > 0 else 'NEGATIVE' if outcome < 0 else 'NEUTRAL'}
 """
                 examples_section += "\nBased on these historical news patterns, analyze the current setup:\n"
+            else:
+                examples_section = "\n\n**NO HISTORICAL EXAMPLES AVAILABLE**\nMake your prediction based solely on the current setup's news data. Be conservative and neutral when information is limited.\n"
             
             prediction_prompt = f"""You are an expert financial news analyst making investment predictions.
 
@@ -1694,13 +1714,27 @@ Focus on:
             
             # Parse JSON response with better error handling
             try:
-                if result_text.startswith('```json'):
-                    result_text = result_text.split('```json')[1].split('```')[0].strip()
-                elif result_text.startswith('```'):
-                    result_text = result_text.split('```')[1].split('```')[0].strip()
-                
+                # More robust JSON extraction
                 import json
-                prediction_result = json.loads(result_text)
+                import re
+                
+                # Try to find JSON content in the response
+                json_match = re.search(r'\{[^{}]*"predicted_outperformance_10d"[^{}]*\}', result_text, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                elif result_text.startswith('```json'):
+                    json_str = result_text.split('```json')[1].split('```')[0].strip()
+                elif result_text.startswith('```'):
+                    json_str = result_text.split('```')[1].split('```')[0].strip()
+                elif '{' in result_text and '}' in result_text:
+                    # Extract content between first { and last }
+                    start = result_text.find('{')
+                    end = result_text.rfind('}') + 1
+                    json_str = result_text[start:end]
+                else:
+                    json_str = result_text
+                
+                prediction_result = json.loads(json_str)
                 
                 # Validate required fields
                 if 'predicted_outperformance_10d' not in prediction_result:

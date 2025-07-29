@@ -188,12 +188,35 @@ class EnhancedUserPostsAgentComplete:
             abs_lancedb_dir = os.path.abspath(self.lancedb_dir)
             logger.info(f"Connecting to LanceDB at absolute path: {abs_lancedb_dir}")
             db = lancedb.connect(abs_lancedb_dir)
+            self.db = db  # Store the db connection
             
-            # In prediction mode, we don't need to open any tables
+            # In prediction mode, we only need training table for similarity search
             if hasattr(self, 'mode') and self.mode == 'prediction':
-                logger.info("Prediction mode: Skipping table opening")
+                logger.info("Prediction mode: Skipping main table opening")
                 self.table = None
+                
+                # Initialize training table for similarity search (REQUIRED for prediction)
                 self.training_table = None
+                try:
+                    # List available tables
+                    tables = db.table_names()
+                    logger.info(f"Available tables: {tables}")
+                    
+                    # Try to open with different possible table names
+                    if "userposts_embeddings" in tables:
+                        self.training_table = db.open_table("userposts_embeddings")
+                        logger.info("Successfully opened userposts_embeddings for similarity search")
+                    elif "userposts_embeddings_training" in tables:
+                        self.training_table = db.open_table("userposts_embeddings_training")
+                        logger.info("Successfully opened userposts_embeddings_training for similarity search")
+                    elif "userposts_embeddings_old" in tables:
+                        self.training_table = db.open_table("userposts_embeddings_old")
+                        logger.info("Successfully opened userposts_embeddings_old for similarity search")
+                    else:
+                        logger.warning("No userposts embeddings table found in available tables")
+                except Exception as e:
+                    logger.warning(f"Training embeddings table not available: {e}")
+                    
                 return
                 
             # Try to open existing table or note that it needs to be created
@@ -961,6 +984,25 @@ Return ONLY the JSON object."""
             Dictionary with LLM prediction results
         """
         try:
+            # Check if there are insufficient user posts features - return neutral prediction immediately
+            sentiment = current_features.get('community_sentiment_score', 0.0)
+            bull_bear = current_features.get('bull_bear_ratio', 1.0)
+            rumor_intensity = current_features.get('rumor_intensity', 0.0)
+            trusted_sentiment = current_features.get('trusted_user_sentiment', 0.0)
+            
+            # If neutral sentiment with no significant activity, return neutral
+            if sentiment == 0.0 and bull_bear == 1.0 and rumor_intensity == 0.0 and trusted_sentiment == 0.0:
+                logger.info(f"No significant user posts activity for {setup_id} - returning neutral prediction")
+                return {
+                    'setup_id': setup_id,
+                    'predicted_outperformance_10d': 0.0,
+                    'confidence_score': 0.34,
+                    'prediction_class': 'NEUTRAL',
+                    'reasoning': 'No significant user posts activity - neutral prediction',
+                    'prediction_method': 'no_data_fallback',
+                    'similar_cases_used': 0
+                }
+            
             # Create context from current user posts features
             context = f"""Setup {setup_id} Community Analysis:
 - Community Sentiment: {current_features.get('community_sentiment_score', 0.0)}
@@ -988,6 +1030,8 @@ Actual Outcome: {outcome:+.1f}% outperformance vs sector (10 days)
 Result: {'POSITIVE' if outcome > 0 else 'NEGATIVE' if outcome < 0 else 'NEUTRAL'}
 """
                 examples_section += "\nBased on these historical community patterns, analyze the current setup:\n"
+            else:
+                examples_section = "\n\n**NO HISTORICAL EXAMPLES AVAILABLE**\nMake your prediction based solely on the current setup's community data. Be conservative and neutral when information is limited.\n"
             
             prediction_prompt = f"""You are an expert community sentiment analyst making investment predictions.
 
@@ -1026,14 +1070,40 @@ Focus on:
             
             result_text = response.choices[0].message.content.strip()
             
-            # Parse JSON response
-            if result_text.startswith('```json'):
-                result_text = result_text.split('```json')[1].split('```')[0].strip()
-            elif result_text.startswith('```'):
-                result_text = result_text.split('```')[1].split('```')[0].strip()
-            
-            import json
-            prediction_result = json.loads(result_text)
+            # Parse JSON response with better error handling
+            try:
+                # More robust JSON extraction
+                import json
+                import re
+                
+                # Try to find JSON content in the response
+                json_match = re.search(r'\{[^{}]*"predicted_outperformance_10d"[^{}]*\}', result_text, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                elif result_text.startswith('```json'):
+                    json_str = result_text.split('```json')[1].split('```')[0].strip()
+                elif result_text.startswith('```'):
+                    json_str = result_text.split('```')[1].split('```')[0].strip()
+                elif '{' in result_text and '}' in result_text:
+                    # Extract content between first { and last }
+                    start = result_text.find('{')
+                    end = result_text.rfind('}') + 1
+                    json_str = result_text[start:end]
+                else:
+                    json_str = result_text
+                
+                prediction_result = json.loads(json_str)
+                
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error(f"Failed to parse LLM response as JSON: {e}")
+                logger.error(f"Raw response: {result_text}")
+                # Create default prediction as requested: outperformance=0.0, confidence=0.34
+                prediction_result = {
+                    'predicted_outperformance_10d': 0.0,
+                    'confidence_score': 0.34,
+                    'prediction_class': 'NEUTRAL',
+                    'reasoning': f'JSON parsing failed - using default neutral prediction'
+                }
             
             # Add metadata
             prediction_result['setup_id'] = setup_id

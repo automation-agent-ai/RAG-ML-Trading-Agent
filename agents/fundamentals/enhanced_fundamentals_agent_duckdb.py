@@ -824,6 +824,24 @@ Focus on financial performance, earnings, profit warnings, and capital structure
             Dictionary with LLM prediction results
         """
         try:
+            # Check if there are no financial results AND no structured metrics - return neutral prediction immediately
+            financial_count = current_features.get('count_financial_results', 0)
+            has_structured_metrics = any(current_features.get(metric) is not None for metric in 
+                                        ['roa', 'roe', 'debt_to_equity', 'current_ratio', 
+                                         'gross_margin', 'net_margin', 'revenue_growth'])
+            
+            if financial_count == 0 and not has_structured_metrics:
+                logger.info(f"No financial results or structured metrics for {setup_id} - returning neutral prediction")
+                return {
+                    'setup_id': setup_id,
+                    'predicted_outperformance_10d': 0.0,
+                    'confidence_score': 0.34,
+                    'prediction_class': 'NEUTRAL',
+                    'reasoning': 'No financial data available - neutral prediction',
+                    'prediction_method': 'no_data_fallback',
+                    'similar_cases_used': 0
+                }
+            
             # Create context from current features
             context = f"""Setup {setup_id} Financial Analysis:
 - Financial Results Count: {current_features.get('count_financial_results', 0)}
@@ -850,6 +868,8 @@ Actual Outcome: {outcome:+.1f}% outperformance vs sector (10 days)
 Result: {'POSITIVE' if outcome > 0 else 'NEGATIVE' if outcome < 0 else 'NEUTRAL'}
 """
                 examples_section += "\nBased on these historical patterns, analyze the current setup:\n"
+            else:
+                examples_section = "\n\n**NO HISTORICAL EXAMPLES AVAILABLE**\nMake your prediction based solely on the current setup's financial data. Be conservative and neutral when information is limited.\n"
             
             prediction_prompt = f"""You are an expert financial analyst making investment predictions.
 
@@ -890,13 +910,27 @@ Focus on:
             
             # Parse JSON response with better error handling
             try:
-                if result_text.startswith('```json'):
-                    result_text = result_text.split('```json')[1].split('```')[0].strip()
-                elif result_text.startswith('```'):
-                    result_text = result_text.split('```')[1].split('```')[0].strip()
-                
+                # More robust JSON extraction
                 import json
-                prediction_result = json.loads(result_text)
+                import re
+                
+                # Try to find JSON content in the response
+                json_match = re.search(r'\{[^{}]*"predicted_outperformance_10d"[^{}]*\}', result_text, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                elif result_text.startswith('```json'):
+                    json_str = result_text.split('```json')[1].split('```')[0].strip()
+                elif result_text.startswith('```'):
+                    json_str = result_text.split('```')[1].split('```')[0].strip()
+                elif '{' in result_text and '}' in result_text:
+                    # Extract content between first { and last }
+                    start = result_text.find('{')
+                    end = result_text.rfind('}') + 1
+                    json_str = result_text[start:end]
+                else:
+                    json_str = result_text
+                
+                prediction_result = json.loads(json_str)
                 
                 # Validate required fields
                 if 'predicted_outperformance_10d' not in prediction_result:

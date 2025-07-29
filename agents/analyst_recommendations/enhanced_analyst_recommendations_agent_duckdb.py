@@ -104,12 +104,35 @@ class EnhancedAnalystRecommendationsAgentDuckDB:
         """Connect to LanceDB table"""
         try:
             db = lancedb.connect(self.lancedb_dir)
+            self.db = db  # Store the db connection
             
-            # In prediction mode, we don't need to open any tables
+            # In prediction mode, we only need training table for similarity search
             if hasattr(self, 'mode') and self.mode == 'prediction':
-                logger.info("Prediction mode: Skipping table opening")
+                logger.info("Prediction mode: Skipping main table opening")
                 self.table = None
+                
+                # Initialize training table for similarity search (REQUIRED for prediction)
                 self.training_table = None
+                try:
+                    # List available tables
+                    tables = db.table_names()
+                    logger.info(f"Available tables: {tables}")
+                    
+                    # Try to open with different possible table names
+                    if "analyst_recommendations_embeddings" in tables:
+                        self.training_table = db.open_table("analyst_recommendations_embeddings")
+                        logger.info("Successfully opened analyst_recommendations_embeddings for similarity search")
+                    elif "analyst_recommendations_embeddings_training" in tables:
+                        self.training_table = db.open_table("analyst_recommendations_embeddings_training")
+                        logger.info("Successfully opened analyst_recommendations_embeddings_training for similarity search")
+                    elif "analyst_embeddings_old" in tables:
+                        self.training_table = db.open_table("analyst_embeddings_old")
+                        logger.info("Successfully opened analyst_embeddings_old for similarity search")
+                    else:
+                        logger.warning("No analyst recommendations embeddings table found in available tables")
+                except Exception as e:
+                    logger.warning(f"Training embeddings table not available: {e}")
+                    
                 return
                 
             # Try to open existing table or note that it needs to be created
@@ -846,6 +869,25 @@ Return JSON format:
             Dictionary with LLM prediction results
         """
         try:
+            # Check if there are insufficient analyst features - return neutral prediction immediately
+            consensus_rating = current_features.get('consensus_rating', 3.0)
+            upgrades = current_features.get('recent_upgrades', 0)
+            downgrades = current_features.get('recent_downgrades', 0)
+            conviction = current_features.get('analyst_conviction_score', 0.5)
+            
+            # If neutral consensus with no recent changes, return neutral
+            if consensus_rating == 3.0 and upgrades == 0 and downgrades == 0 and conviction == 0.5:
+                logger.info(f"No significant analyst activity for {setup_id} - returning neutral prediction")
+                return {
+                    'setup_id': setup_id,
+                    'predicted_outperformance_10d': 0.0,
+                    'confidence_score': 0.34,
+                    'prediction_class': 'NEUTRAL',
+                    'reasoning': 'No significant analyst activity - neutral prediction',
+                    'prediction_method': 'no_data_fallback',
+                    'similar_cases_used': 0
+                }
+            
             # Create context from current analyst features
             context = f"""Setup {setup_id} Analyst Analysis:
 - Consensus Rating: {current_features.get('consensus_rating', 3.0)}
@@ -872,6 +914,8 @@ Actual Outcome: {outcome:+.1f}% outperformance vs sector (10 days)
 Result: {'POSITIVE' if outcome > 0 else 'NEGATIVE' if outcome < 0 else 'NEUTRAL'}
 """
                 examples_section += "\nBased on these historical analyst patterns, analyze the current setup:\n"
+            else:
+                examples_section = "\n\n**NO HISTORICAL EXAMPLES AVAILABLE**\nMake your prediction based solely on the current setup's analyst data. Be conservative and neutral when information is limited.\n"
             
             prediction_prompt = f"""You are an expert analyst coverage specialist making investment predictions.
 
@@ -909,14 +953,40 @@ Focus on:
             
             result_text = response.choices[0].message.content.strip()
             
-            # Parse JSON response
-            if result_text.startswith('```json'):
-                result_text = result_text.split('```json')[1].split('```')[0].strip()
-            elif result_text.startswith('```'):
-                result_text = result_text.split('```')[1].split('```')[0].strip()
+            # Parse JSON response with better error handling
+            try:
+                # More robust JSON extraction
+                import json
+                import re
+                
+                # Try to find JSON content in the response
+                json_match = re.search(r'\{[^{}]*"predicted_outperformance_10d"[^{}]*\}', result_text, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                elif result_text.startswith('```json'):
+                    json_str = result_text.split('```json')[1].split('```')[0].strip()
+                elif result_text.startswith('```'):
+                    json_str = result_text.split('```')[1].split('```')[0].strip()
+                elif '{' in result_text and '}' in result_text:
+                    # Extract content between first { and last }
+                    start = result_text.find('{')
+                    end = result_text.rfind('}') + 1
+                    json_str = result_text[start:end]
+                else:
+                    json_str = result_text
+                
+                prediction_result = json.loads(json_str)
             
-            import json
-            prediction_result = json.loads(result_text)
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error for {setup_id}: {e}")
+                logger.error(f"Raw content: {result_text}")
+                # Create default prediction as requested: outperformance=0.0, confidence=0.34
+                prediction_result = {
+                    'predicted_outperformance_10d': 0.0,
+                    'confidence_score': 0.34,
+                    'prediction_class': 'NEUTRAL',
+                    'reasoning': f'JSON parsing failed - using default neutral prediction'
+                }
             
             # Add metadata
             prediction_result['setup_id'] = setup_id
