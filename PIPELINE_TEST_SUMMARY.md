@@ -10,7 +10,7 @@ We have successfully implemented and tested the enhanced 3-stage ML pipeline wit
 
 **Command tested:**
 ```bash
-python train_3stage_ml_pipeline.py --output-dir models_3stage_corrected
+python train_3stage_ml_pipeline.py --output-dir models/3stage_corrected
 ```
 
 **Results:**
@@ -37,7 +37,7 @@ python train_3stage_ml_pipeline.py --output-dir models_3stage_corrected
 
 **Command tested:**
 ```bash
-python predict_3stage_ml_pipeline.py --models-dir models_3stage_corrected --output-dir data/predictions_corrected
+python predict_3stage_ml_pipeline.py --models-dir models/3stage_corrected --output-dir data/predictions_corrected
 ```
 
 **Results:**
@@ -158,8 +158,8 @@ python generate_results_table.py --input data/predictions_corrected/final_predic
 
 All commands in `docs/OPTIMIZED_WORKFLOW.md` from steps 11-13 have been tested and work correctly:
 
-1. **Step 11**: `python train_3stage_ml_pipeline.py --output-dir models_3stage`
-2. **Step 12**: `python predict_3stage_ml_pipeline.py --models-dir models_3stage --output-dir data/predictions`  
+1. **Step 11**: `python train_3stage_ml_pipeline.py --output-dir models/3stage`
+2. **Step 12**: `python predict_3stage_ml_pipeline.py --models-dir models/3stage --output-dir data/predictions`  
 3. **Step 13**: `python generate_results_table.py --input data/predictions/final_predictions_*.csv --output data/results_table.csv`
 
 ## 🔧 Technical Fixes Applied

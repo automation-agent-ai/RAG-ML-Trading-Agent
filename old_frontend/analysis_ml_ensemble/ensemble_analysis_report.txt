@@ -1,0 +1,101 @@
+================================================================================
+ENSEMBLE MULTICLASS OUTPERFORMANCE PREDICTION - ANALYSIS REPORT
+================================================================================
+Generated: 2025-07-24 12:59:14
+
+ENSEMBLE OVERVIEW
+----------------------------------------
+Total samples: 640
+Ensemble features: 17
+Combines: Text model + Fundamentals model predictions
+
+COMPONENT MODEL PERFORMANCE
+----------------------------------------
+Text Model:
+  Accuracy: 0.356
+  Positive Precision: 0.348
+
+Fundamentals Model:
+  Accuracy: 0.353
+  Positive Precision: 0.374
+
+ENSEMBLE MODEL PERFORMANCE
+----------------------------------------
+
+RandomForest:
+  Accuracy: 0.352
+  Precision (macro): 0.355
+  Precision (Positive class): 0.436
+  Recall (macro): 0.352
+  F1 Score (macro): 0.352
+
+XGBoost:
+  Accuracy: 0.406
+  Precision (macro): 0.403
+  Precision (Positive class): 0.451
+  Recall (macro): 0.406
+  F1 Score (macro): 0.403
+
+LightGBM:
+  Accuracy: 0.398
+  Precision (macro): 0.398
+  Precision (Positive class): 0.442
+  Recall (macro): 0.398
+  F1 Score (macro): 0.398
+
+LogisticRegression:
+  Accuracy: 0.305
+  Precision (macro): 0.312
+  Precision (Positive class): 0.255
+  Recall (macro): 0.303
+  F1 Score (macro): 0.305
+
+ENSEMBLE WEIGHTING ANALYSIS
+----------------------------------------
+RandomForest Component Weights:
+  Text component: 39.0%
+  Fundamentals component: 28.0%
+  Agreement factor: 0.8%
+  Confidence factor: 32.2%
+
+XGBoost Component Weights:
+  Text component: 36.2%
+  Fundamentals component: 34.3%
+  Agreement factor: 6.5%
+  Confidence factor: 23.0%
+
+LightGBM Component Weights:
+  Text component: 40.1%
+  Fundamentals component: 24.8%
+  Agreement factor: 0.7%
+  Confidence factor: 34.5%
+
+LogisticRegression Component Weights:
+  Text component: 55.3%
+  Fundamentals component: 31.4%
+  Agreement factor: 3.7%
+  Confidence factor: 9.7%
+
+PERFORMANCE GAINS
+----------------------------------------
+Best ensemble model: XGBoost
+Best baseline precision: 0.374
+Best ensemble precision: 0.451
+Precision gain: +20.6%
+
+COMPONENT MODEL AGREEMENT
+----------------------------------------
+Overall agreement: 32.5%
+Disagreement (diversity): 67.5%
+Higher disagreement indicates models capture different signals
+
+TRADING INTERPRETATION
+----------------------------------------
+Best ensemble precision: 45.1%
+The ensemble combines:
+- Text sentiment and news analysis
+- Financial fundamentals and ratios
+- Model agreement confidence
+When ensemble predicts BUY, it's correct 45.1% of the time
+
+================================================================================

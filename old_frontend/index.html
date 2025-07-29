@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Pipeline Frontend</title>
+    <link rel="stylesheet" href="/static/style.css">
+    
+    <!-- Cytoscape.js and Extensions for Knowledge Graph -->
+    <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+    <script src="https://unpkg.com/cytoscape-cola@2.5.1/cytoscape-cola.js"></script>
+    <script src="https://unpkg.com/cytoscape-klay@3.1.4/cytoscape-klay.js"></script>
+    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/webcola@3.4.0/WebCola/cola.min.js"></script>
+</head>
+<body>
+    <!-- Navigation Header -->
+    <nav class="main-nav">
+        <div class="nav-container">
+            <h1 class="nav-title">🚀 RAG Pipeline Dashboard</h1>
+            <div class="nav-links">
+                <button class="nav-btn active" onclick="showPage('main')">📊 Main Dashboard</button>
+                <button class="nav-btn" onclick="showPage('data')">📋 Data Analysis</button>
+                <button class="nav-btn" onclick="showPage('metrics')">📈 Model Evaluation</button>
+                <button class="nav-btn" onclick="showPage('visualizations')">🎨 Visualizations</button>
+                <button class="nav-btn" onclick="showPage('knowledge-graph')">🧠 Knowledge Graph</button>
+                <div class="theme-selector">
+                    <select id="theme-selector">
+                        <option value="default">🔵 Blue Theme</option>
+                        <option value="dark">🌙 Dark Theme</option>
+                        <option value="slate">💼 Professional Slate</option>
+                        <option value="teal">🏢 Modern Teal</option>
+                        <option value="indigo">👔 Executive Indigo</option>
+                        <option value="rose">📈 Financial Rose</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Dashboard Page -->
+    <div id="main-page" class="page-content active">
+        <div class="container">
+            <!-- Setup Selection and Prediction Analysis -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🎯 Setup Analysis & Predictions</h2>
+                    <div class="health-indicator" id="health-indicator">
+                        <span class="status-dot"></span>
+                        <span id="health-status">Connecting...</span>
+                    </div>
+                </div>
+                <div class="ribbon-content">
+                    <div class="setup-controls">
+                        <div class="control-group">
+                            <label for="setup-select">Select Setup:</label>
+                            <select id="setup-select">
+                                <option value="">Loading setups...</option>
+                            </select>
+                        </div>
+                        <button id="predict-btn" class="primary-btn" disabled>🔮 Generate Prediction</button>
+                    </div>
+                    
+                    <div id="prediction-results" class="prediction-section" style="display: none;">
+                        <h3>📊 Prediction Analysis</h3>
+                        <div class="prediction-metrics">
+                            <div class="metric-card">
+                                <div class="metric-label">Prediction</div>
+                                <div class="metric-value" id="prediction-value">-</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Probability</div>
+                                <div class="metric-value" id="probability-value">-</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Confidence</div>
+                                <div class="metric-value" id="confidence-value">-</div>
+                            </div>
+                        </div>
+                        <div class="prediction-details">
+                            <div class="detail-section">
+                                <h4>🔍 Key Factors</h4>
+                                <div id="key-factors" class="factors-list">-</div>
+                            </div>
+                            <div class="detail-section">
+                                <h4>⚠️ Risk Factors</h4>
+                                <div id="risk-factors" class="factors-list">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scanner Integration -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🔍 Portfolio Scanner</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div class="scanner-controls">
+                        <div class="input-group">
+                            <label for="scanner-date-from">Start Date:</label>
+                            <input type="date" id="scanner-date-from" />
+                        </div>
+                        <div class="input-group">
+                            <label for="scanner-date-to">End Date:</label>
+                            <input type="date" id="scanner-date-to" />
+                        </div>
+                        <div class="input-group">
+                            <label for="scanner-min-prob">Min Probability:</label>
+                            <input type="number" id="scanner-min-prob" min="0" max="1" step="0.1" value="0.5" />
+                        </div>
+                        <div class="scanner-buttons">
+                            <button id="scan-btn" class="primary-btn">🔍 Scan Date Range</button>
+                            <button id="scan-today-btn" class="secondary-btn">📅 Scan Today</button>
+                        </div>
+                    </div>
+                    <div id="scanner-results" class="scanner-results" style="display: none;">
+                        <h3>Scanner Results</h3>
+                        <div id="scanner-output"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Knowledge Graph Explanation -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🧠 Knowledge Graph Explanation</h2>
+                </div>
+                <div class="ribbon-content">
+                    <button id="explain-btn" class="primary-btn" disabled>💡 Generate Explanation</button>
+                    <div id="explanation-results" class="explanation-section" style="display: none;">
+                        <div id="explanation-content"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Analysis Page -->
+    <div id="data-page" class="page-content">
+        <div class="container">
+            <!-- Fundamentals Data -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>💰 Fundamentals Data</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="fundamentals-data" class="data-section">
+                        <p>Select a setup on the Main Dashboard to view fundamentals data</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RNS News Data -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>📰 RNS News Data</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="news-data" class="data-section">
+                        <p>Select a setup on the Main Dashboard to view news data</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- User Posts Data -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>👥 User Posts Data</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="userposts-data" class="data-section">
+                        <p>Select a setup on the Main Dashboard to view user posts data</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Model Evaluation Page -->
+    <div id="metrics-page" class="page-content">
+        <div class="container">
+            <!-- Model Performance Comparison -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🏆 Model Performance Comparison</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="model-performance-table"></div>
+                </div>
+            </div>
+
+            <!-- Feature Importance Analysis -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🎯 Top Features Analysis</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="feature-importance-table"></div>
+                </div>
+            </div>
+
+            <!-- Perfect Setup Reference -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>⭐ Perfect Setup Reference</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="perfect-setup" class="perfect-setup-section">
+                        <p>Loading perfect setup data...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Visualizations Page -->
+    <div id="visualizations-page" class="page-content">
+        <div class="container">
+            <!-- Fundamentals Analysis Visualizations -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>📊 Fundamentals Analysis</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="fundamentals-visualizations" class="visualizations-grid">
+                        <p>Loading fundamentals visualizations...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Text Analysis Visualizations -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>📝 Text Analysis</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="text-visualizations" class="visualizations-grid">
+                        <p>Loading text analysis visualizations...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ensemble Analysis Visualizations -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🎯 Ensemble Analysis</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="ensemble-visualizations" class="visualizations-grid">
+                        <p>Loading ensemble visualizations...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Knowledge Graph Page -->
+    <div id="knowledge-graph-page" class="page-content">
+        <div class="container">
+            <!-- Knowledge Graph Controls -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🧠 Knowledge Graph Explorer</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div class="kg-controls">
+                        <div class="input-group">
+                            <label for="kg-setup-select">Select Setup:</label>
+                            <select id="kg-setup-select">
+                                <option value="">Choose a setup to explore...</option>
+                            </select>
+                            <div class="kg-recommendations">
+                                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem;">
+                                    💡 <strong>Recommended setups with rich feature data:</strong>
+                                    <br>🟢 BLND_2025-03-21 (British Land) - 20 nodes, 72 edges
+                                    <br>🟢 WTB_2025-01-06 (Whitbread) - Multiple features
+                                    <br>🟢 HWDN_2024-08-16 (Howden) - Multiple features
+                                </p>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label for="kg-analysis-depth">Analysis Depth:</label>
+                            <select id="kg-analysis-depth">
+                                <option value="shallow">Shallow</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="deep">Deep</option>
+                            </select>
+                        </div>
+                        <div class="kg-buttons">
+                            <button id="kg-explore-btn" class="primary-btn" disabled>🔍 Explore Graph</button>
+                            <button id="kg-reset-btn" class="secondary-btn">🔄 Reset View</button>
+                        </div>
+                    </div>
+                    <div class="kg-status">
+                        <div id="kg-status-indicator" class="status-indicator">
+                            <span class="status-dot"></span>
+                            <span id="kg-status-text">Initializing...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Knowledge Graph Visualization -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>📊 Interactive Knowledge Graph</h2>
+                    <div class="kg-layout-controls">
+                        <label for="kg-layout-select">Layout:</label>
+                        <select id="kg-layout-select">
+                            <option value="cose-bilkent">🌟 COSE-Bilkent (Best for KG)</option>
+                            <option value="dagre">📊 Dagre (Hierarchical)</option>
+                            <option value="cola">🔗 Cola (Force-directed)</option>
+                            <option value="circle">⭕ Circle</option>
+                            <option value="grid">📐 Grid</option>
+                            <option value="concentric">🎯 Concentric</option>
+                        </select>
+                        <button id="kg-layout-apply" class="secondary-btn">Apply Layout</button>
+                    </div>
+                </div>
+                <div class="ribbon-content">
+                    <div id="kg-visualization-container" class="kg-viz-container">
+                        <div id="kg-graph-cytoscape" class="kg-graph-cytoscape"></div>
+                        <div id="kg-loading" class="kg-loading">
+                            <div class="spinner"></div>
+                            <p>Loading knowledge graph...</p>
+                        </div>
+                        <div id="kg-info-panel" class="kg-info-panel">
+                            <h4>Node Information</h4>
+                            <div id="kg-node-details">Select a node to view details</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Similar Setups Analysis -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🔍 Similar Setups Analysis</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="kg-similar-setups" class="kg-analysis-section">
+                        <p>Select a setup to view similar setups analysis...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Reasoning Paths -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🧠 Reasoning Paths</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="kg-reasoning-paths" class="kg-analysis-section">
+                        <p>Select a setup to view reasoning paths...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Key Insights -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>💡 Key Insights & Recommendations</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div id="kg-insights" class="kg-analysis-section">
+                        <p>Select a setup to view insights and recommendations...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=2.0"></script>
+</body>
+</html> 

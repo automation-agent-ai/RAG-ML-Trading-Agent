@@ -6,7 +6,7 @@ _Exported on 7/28/2025 at 21:04:23 GMT+2 from Cursor (1.3.3)_
 **User**
 
 i am running the 
-python train_3stage_ml_pipeline.py --output-dir models_3stage
+python train_3stage_ml_pipeline.py --output-dir models/3stage
 
 please solve the errors 
 
@@ -602,7 +602,7 @@ Makes predictions using the trained 3-stage ML pipeline:
 3. Apply ensemble meta-models to prediction vectors
 
 Usage:
-    python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --models-dir models_3stage --output-dir data/predictions
+    python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --models-dir models/3stage --output-dir data/predictions
 """
 
 import os
@@ -1044,7 +1044,7 @@ Train ML models using the proper 3-stage approach:
 
 ```bash
 conda activate sts
-python train_3stage_ml_pipeline.py --output-dir models_3stage_corrected
+python train_3stage_ml_pipeline.py --output-dir models/3stage_corrected
 ```
 
 **What it does:**
@@ -1073,7 +1073,7 @@ Create ensemble predictions using the trained 3-stage ML pipeline:
 
 ```bash
 conda activate sts
-python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --models-dir models_3stage_corrected --output-dir data/predictions_corrected
+python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --models-dir models/3stage_corrected --output-dir data/predictions_corrected
 ```
 
 **What it does:**
@@ -2451,7 +2451,7 @@ The very high ensemble CV scores suggest potential overfitting, which is now cle
 
 To run the enhanced pipeline:
 ```bash
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_corrected
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_corrected
 ```
 
 All the detailed analysis files are now available in the organized folder structure you requested, providing comprehensive insights into each individual model's performance, feature importance, and cross-validation stability.
@@ -2471,7 +2471,7 @@ ml/analysis/
 ```
 
 ```shellscript
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_corrected
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_corrected
 ```
 
 ---
@@ -2819,9 +2819,9 @@ def _generate_ensemble_features_no_leakage(self, X_text, X_financial, y):
 
 do the models have confidence score? we could as an alternative weight the predictions with the confidence score andthen get a weighted outperformance_10d prediction or a predicted class.
 which is the correct command:
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed (from terminal)
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_fixed (from terminal)
 or
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed    (from pipeline)
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_fixed    (from pipeline)
 
 are our results so far in-sample training results or the out-of-sample predicitons?
 
@@ -2873,7 +2873,7 @@ def confidence_weighted_prediction(predictions, confidences):
 
 **From Terminal (Interactive):**
 ```bash
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_fixed
 ```
 
 **From Pipeline Script (Automated):**
@@ -2882,7 +2882,7 @@ python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --outpu
 subprocess.run([
     "python", "train_3stage_ml_pipeline.py", 
     "--input-dir", "data/ml_features/balanced", 
-    "--output-dir", "models_3stage_fixed"
+    "--output-dir", "models/3stage_fixed"
 ])
 ```
 
@@ -2936,7 +2936,7 @@ def confidence_weighted_prediction(predictions, confidences):
 ```
 
 ```shellscript
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_fixed
 ```
 
 ```python
@@ -2944,7 +2944,7 @@ python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --outpu
 subprocess.run([
     "python", "train_3stage_ml_pipeline.py", 
     "--input-dir", "data/ml_features/balanced", 
-    "--output-dir", "models_3stage_fixed"
+    "--output-dir", "models/3stage_fixed"
 ])
 ```
 
@@ -3412,7 +3412,7 @@ def main():
     parser = argparse.ArgumentParser(description='3-Stage ML Prediction Pipeline')
     parser.add_argument('--input-dir', default='data/ml_features/balanced', 
                        help='Directory containing prediction feature CSV files')
-    parser.add_argument('--model-dir', default='models_3stage_fixed', 
+    parser.add_argument('--model-dir', default='models/3stage_fixed', 
                        help='Directory containing trained models')
     parser.add_argument('--output-dir', default='ml/prediction', 
                        help='Output directory for predictions')
@@ -3727,12 +3727,12 @@ python generate_results_table.py --input ml/prediction/final_predictions_2025072
 
 **For Training (with detailed per-model CV results and visualizations):**
 ```bash
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_fixed
 ```
 
 **For Out-of-Sample Prediction:**
 ```bash
-python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models_3stage_fixed --output-dir ml/prediction
+python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models/3stage_fixed --output-dir ml/prediction
 ```
 
 **For Results Table:**
@@ -3784,11 +3784,11 @@ python generate_results_table.py --input ml/prediction/final_predictions_2025072
 ```
 
 ```shellscript
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_fixed
 ```
 
 ```shellscript
-python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models_3stage_fixed --output-dir ml/prediction
+python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models/3stage_fixed --output-dir ml/prediction
 ```
 
 ```shellscript
@@ -3824,7 +3824,7 @@ Train ML models using the proper 3-stage approach:
 
 ```bash
 conda activate sts
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_fixed
 ```
 
 **What it does:**
@@ -3860,7 +3860,7 @@ Create ensemble predictions using the trained 3-stage ML pipeline:
 
 ```bash
 conda activate sts
-python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models_3stage_fixed --output-dir ml/prediction
+python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models/3stage_fixed --output-dir ml/prediction
 ```
 
 **What it does:**
@@ -4109,11 +4109,11 @@ For more control over the enhanced 3-stage ML pipeline, you can run the individu
 
 ```bash
 conda activate sts
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_fixed
 ```
 
 This generates:
-- Trained models in `models_3stage_fixed/` directory
+- Trained models in `models/3stage_fixed/` directory
 - Detailed cross-validation results in `ml/analysis/` directories
 - Feature importance plots, confusion matrices, and classification reports for each model
 
@@ -4121,7 +4121,7 @@ This generates:
 
 ```bash
 conda activate sts
-python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models_3stage_fixed --output-dir ml/prediction
+python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models/3stage_fixed --output-dir ml/prediction
 ```
 
 This generates:

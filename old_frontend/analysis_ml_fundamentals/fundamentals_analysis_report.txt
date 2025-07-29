@@ -1,0 +1,93 @@
+================================================================================
+FUNDAMENTALS-ONLY MULTICLASS OUTPERFORMANCE PREDICTION - ANALYSIS REPORT
+================================================================================
+Generated: 2025-07-24 12:56:01
+
+DATASET OVERVIEW
+----------------------------------------
+Total samples: 640
+Fundamentals features: 6
+
+FUNDAMENTALS FEATURE TYPES
+----------------------------------------
+Financial Ratios: 4
+Raw Fundamentals: 1
+Processed Features: 2
+
+MODEL PERFORMANCE SUMMARY
+----------------------------------------
+
+RandomForest:
+  Accuracy: 0.422
+  Precision (macro): 0.420
+  Precision (Positive class): 0.431
+  Recall (macro): 0.424
+  F1 Score (macro): 0.413
+
+XGBoost:
+  Accuracy: 0.422
+  Precision (macro): 0.433
+  Precision (Positive class): 0.385
+  Recall (macro): 0.425
+  F1 Score (macro): 0.421
+
+LightGBM:
+  Accuracy: 0.453
+  Precision (macro): 0.456
+  Precision (Positive class): 0.440
+  Recall (macro): 0.453
+  F1 Score (macro): 0.453
+
+LogisticRegression:
+  Accuracy: 0.375
+  Precision (macro): 0.382
+  Precision (Positive class): 0.352
+  Recall (macro): 0.380
+  F1 Score (macro): 0.347
+
+CROSS-VALIDATION RESULTS (5-Fold)
+----------------------------------------
+
+RandomForest:
+  Accuracy: 0.381 ± 0.042
+  Precision (macro): 0.398 ± 0.041
+
+XGBoost:
+  Accuracy: 0.422 ± 0.032
+  Precision (macro): 0.423 ± 0.031
+
+LightGBM:
+  Accuracy: 0.389 ± 0.020
+  Precision (macro): 0.395 ± 0.022
+
+LogisticRegression:
+  Accuracy: 0.315 ± 0.045
+  Precision (macro): 0.339 ± 0.080
+
+TOP FUNDAMENTALS FEATURES (RandomForest)
+----------------------------------------
+net_margin: 0.4676
+gross_margin: 0.3682
+debt_to_equity: 0.1211
+current_ratio: 0.0431
+count_financial_results: 0.0000
+max_severity_financial_results: 0.0000
+
+MODEL RECOMMENDATION
+----------------------------------------
+Best fundamentals model for Positive class precision: LightGBM
+Positive class precision: 0.440
+
+TRADING INTERPRETATION:
+- Positive class (BUY signal) precision of 44.0% means:
+  When the fundamentals model predicts a stock will be in the top 33.3% of performers,
+  it is correct 44.0% of the time.
+- This focuses on financial health and fundamental analysis.
+
+PERFORMANCE vs BASELINES
+----------------------------------------
+Random baseline accuracy: 33.3%
+Best fundamentals model accuracy: 45.3%
+Improvement over random: 35.9%
+
+================================================================================

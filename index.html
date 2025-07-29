@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 Enhanced RAG Pipeline Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    
+    <!-- Cytoscape.js and Extensions for Knowledge Graph -->
+    <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+    <script src="https://unpkg.com/cytoscape-cola@2.5.1/cytoscape-cola.js"></script>
+    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/webcola@3.4.0/WebCola/cola.min.js"></script>
+</head>
+<body>
+    <!-- Enhanced Navigation Header -->
+    <nav class="main-nav">
+        <div class="nav-container">
+            <h1 class="nav-title">🚀 Enhanced RAG Pipeline Dashboard</h1>
+            <div class="nav-links">
+                <button class="nav-btn active" onclick="showPage('main')">🎭 Live Theater</button>
+                <button class="nav-btn" onclick="showPage('analysis')">📊 Analysis</button>
+                <button class="nav-btn" onclick="showPage('data')">📋 Data Explorer</button>
+                <button class="nav-btn" onclick="showPage('models')">🤖 Model Performance</button>
+                <button class="nav-btn" onclick="showPage('visualizations')">🎨 Visualizations</button>
+                <button class="nav-btn" onclick="showPage('knowledge-graph')">🧠 Knowledge Graph</button>
+                <div class="theme-selector">
+                    <select id="theme-selector">
+                        <option value="default">🔵 Modern Blue</option>
+                        <option value="dark">🌙 Dark Theme</option>
+                        <option value="slate">💼 Professional Slate</option>
+                        <option value="teal">🏢 Modern Teal</option>
+                        <option value="indigo">👔 Executive Indigo</option>
+                        <option value="rose">📈 Financial Rose</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Live Agent Prediction Theater Page -->
+    <div id="main-page" class="page-content active">
+        <div class="container">
+            <!-- Live Prediction Theater -->
+            <div class="ribbon live-theater">
+                <div class="theater-header">
+                    <div class="theater-title">
+                        🎭 Live Agent Prediction Theater
+                    </div>
+                    <div class="theater-subtitle">
+                        Watch 4 AI agents analyze setups in real-time
+                    </div>
+                </div>
+                
+                <div id="theater-controls" class="theater-controls">
+                    <div class="theater-input-group">
+                        <label for="setup-count">Number of Setups</label>
+                        <input type="number" id="setup-count" class="theater-input" value="5" min="1" max="20">
+                    </div>
+                    
+                    <button id="start-theater-btn" class="theater-btn">
+                        <span>🎬</span>
+                        Start Live Prediction Theater
+                    </button>
+                </div>
+                
+                <div id="theater-stage" class="theater-stage" style="display: none;">
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div id="theater-progress" class="progress-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    
+                    <div id="agents-status" class="agents-grid">
+                        <div class="agent-card fundamentals">
+                            <div class="agent-name">🏛️ Fundamentals Agent</div>
+                            <div class="agent-status">Ready</div>
+                        </div>
+                        <div class="agent-card news">
+                            <div class="agent-name">📰 News Agent</div>
+                            <div class="agent-status">Ready</div>
+                        </div>
+                        <div class="agent-card analyst_recommendations">
+                            <div class="agent-name">📈 Analyst Agent</div>
+                            <div class="agent-status">Ready</div>
+                        </div>
+                        <div class="agent-card userposts">
+                            <div class="agent-name">💬 Community Agent</div>
+                            <div class="agent-status">Ready</div>
+                        </div>
+                    </div>
+                    
+                    <div id="theater-log" class="theater-log"></div>
+                </div>
+            </div>
+
+            <!-- System Health & Statistics -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>📊 System Health & Performance</h2>
+                    <div class="health-indicator" id="health-indicator">
+                        <span class="status-dot"></span>
+                        <span id="health-status">Connecting...</span>
+                    </div>
+                </div>
+                <div class="ribbon-content">
+                    <div class="metrics-grid" id="system-metrics">
+                        <div class="metric-card">
+                            <div class="metric-label">Total Setups</div>
+                            <div class="metric-value" id="total-setups">-</div>
+                            <div class="metric-change" id="setups-change">Loading...</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Available Models</div>
+                            <div class="metric-value" id="available-models">-</div>
+                            <div class="metric-change">All systems operational</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Active Agents</div>
+                            <div class="metric-value" id="active-agents">4</div>
+                            <div class="metric-change positive">Online</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Database Status</div>
+                            <div class="metric-value" id="db-status">-</div>
+                            <div class="metric-change" id="db-change">Checking...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Analysis & Prediction Page -->
+    <div id="analysis-page" class="page-content">
+        <div class="container">
+            <!-- Setup Analysis -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🎯 Setup Analysis & Smart Predictions</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div class="setup-controls">
+                        <div class="control-group">
+                            <label for="setup-select">Select Setup for Analysis:</label>
+                            <select id="setup-select">
+                                <option value="">Loading setups...</option>
+                            </select>
+                            <button id="random-setup-btn" class="secondary-btn">🎲 Random Setup</button>
+                        </div>
+                        <div class="control-group">
+                            <button id="predict-btn" class="primary-btn" disabled>
+                                <span>🔮</span>
+                                Generate Enhanced Prediction
+                            </button>
+                            <button id="similar-btn" class="secondary-btn" disabled>
+                                <span>🔍</span>
+                                Find Similar Setups
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div id="prediction-results" class="prediction-section" style="display: none;">
+                        <h3>📊 Enhanced Prediction Analysis</h3>
+                        <div class="metrics-grid">
+                            <div class="metric-card">
+                                <div class="metric-label">AI Prediction</div>
+                                <div class="metric-value" id="prediction-value">-</div>
+                                <div class="metric-change" id="prediction-confidence">-</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Probability</div>
+                                <div class="metric-value" id="probability-value">-</div>
+                                <div class="metric-change">Confidence Score</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Actual Result</div>
+                                <div class="metric-value" id="actual-value">-</div>
+                                <div class="metric-change" id="accuracy-indicator">-</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Similar Cases</div>
+                                <div class="metric-value" id="similar-count">-</div>
+                                <div class="metric-change">Historical matches</div>
+                            </div>
+                        </div>
+                        
+                        <div class="prediction-details">
+                            <div class="detail-section">
+                                <h4>🔍 AI Reasoning</h4>
+                                <div id="ai-reasoning" class="reasoning-text">-</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="similar-results" class="similar-section" style="display: none;">
+                        <h3>🔍 Similar Historical Cases</h3>
+                        <div class="data-table-container">
+                            <div class="table-header">
+                                <div class="table-title">Similar Setups Based on AI Embeddings</div>
+                                <input type="text" class="table-search" placeholder="Search similar cases..." id="similar-search">
+                            </div>
+                            <table class="data-table" id="similar-table">
+                                <thead>
+                                    <tr>
+                                        <th>Setup ID</th>
+                                        <th>Similarity Score</th>
+                                        <th>Actual Outcome</th>
+                                        <th>Prediction Class</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Portfolio Scanner -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🔍 Intelligent Portfolio Scanner</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div class="scanner-controls">
+                        <div class="control-group">
+                            <label for="start-date">Start Date:</label>
+                            <input type="date" id="start-date" class="theater-input">
+                        </div>
+                        <div class="control-group">
+                            <label for="end-date">End Date:</label>
+                            <input type="date" id="end-date" class="theater-input">
+                        </div>
+                        <div class="control-group">
+                            <label for="min-probability">Min Probability:</label>
+                            <input type="range" id="min-probability" min="0" max="1" step="0.1" value="0.5">
+                            <span id="probability-display">50%</span>
+                        </div>
+                        <button id="scan-btn" class="primary-btn">
+                            <span>🔍</span>
+                            Scan Portfolio
+                        </button>
+                    </div>
+                    
+                    <div id="scanner-results" style="display: none;">
+                        <div class="data-table-container">
+                            <div class="table-header">
+                                <div class="table-title">High-Probability Investment Opportunities</div>
+                            </div>
+                            <table class="data-table" id="scan-table">
+                                <thead>
+                                    <tr>
+                                        <th>Setup ID</th>
+                                        <th>Probability</th>
+                                        <th>Confidence</th>
+                                        <th>Predicted Return</th>
+                                        <th>Risk Level</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Explorer Page -->
+    <div id="data-page" class="page-content">
+        <div class="container">
+            <!-- Data Overview -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>📋 Interactive Data Explorer</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div class="data-tabs">
+                        <button class="tab-btn active" onclick="showDataTab('fundamentals')">🏛️ Fundamentals</button>
+                        <button class="tab-btn" onclick="showDataTab('news')">📰 News Analysis</button>
+                        <button class="tab-btn" onclick="showDataTab('userposts')">💬 Community Sentiment</button>
+                        <button class="tab-btn" onclick="showDataTab('analyst')">📈 Analyst Coverage</button>
+                    </div>
+                    
+                    <div id="data-content">
+                        <div class="data-table-container">
+                            <div class="table-header">
+                                <div class="table-title">Select a data category above</div>
+                                <input type="text" class="table-search" placeholder="Search data..." id="data-search">
+                            </div>
+                            <div id="data-table-placeholder" class="text-center p-4">
+                                <p>Choose a data category to explore comprehensive AI-extracted features</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Model Performance Page -->
+    <div id="models-page" class="page-content">
+        <div class="container">
+            <!-- Model Performance Comparison -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🤖 AI Model Performance Dashboard</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div class="data-table-container">
+                        <div class="table-header">
+                            <div class="table-title">Machine Learning Model Comparison</div>
+                        </div>
+                        <table class="data-table" id="model-performance-table">
+                            <thead>
+                                <tr>
+                                    <th>Model</th>
+                                    <th>Precision</th>
+                                    <th>Recall</th>
+                                    <th>F1-Score</th>
+                                    <th>AUC</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="metrics-grid" id="model-metrics">
+                        <!-- Model metrics will be populated here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Feature Importance Analysis -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🎯 Feature Importance & Model Insights</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div class="feature-analysis" id="feature-importance">
+                        <p class="text-center">Advanced feature importance analysis and model interpretability coming soon...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Visualizations Page -->
+    <div id="visualizations-page" class="page-content">
+        <div class="container">
+            <!-- Visualization Gallery -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🎨 Interactive Analysis Gallery</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div class="viz-categories" id="viz-categories">
+                        <!-- Categories will be populated dynamically -->
+                    </div>
+                    
+                    <div class="viz-gallery" id="viz-gallery">
+                        <p class="text-center">Loading visualization gallery...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Knowledge Graph Page -->
+    <div id="knowledge-graph-page" class="page-content">
+        <div class="container">
+            <!-- Knowledge Graph Visualization -->
+            <div class="ribbon">
+                <div class="ribbon-header">
+                    <h2>🧠 AI Knowledge Graph Explorer</h2>
+                </div>
+                <div class="ribbon-content">
+                    <div class="kg-controls">
+                        <button class="secondary-btn" onclick="initializeKnowledgeGraph()">
+                            <span>🔄</span>
+                            Initialize Graph
+                        </button>
+                        <button class="secondary-btn" onclick="findSimilarNodes()">
+                            <span>🔍</span>
+                            Find Similar Nodes
+                        </button>
+                        <button class="secondary-btn" onclick="exportGraph()">
+                            <span>💾</span>
+                            Export Graph
+                        </button>
+                    </div>
+                    
+                    <div id="knowledge-graph-container" style="height: 600px; border: 2px solid var(--border-color); border-radius: 12px; background: var(--card-background);">
+                        <p class="text-center p-4">Click "Initialize Graph" to load the knowledge graph visualization</p>
+                    </div>
+                    
+                    <div id="graph-info-panel" style="display: none;">
+                        <h4>Node Information</h4>
+                        <div id="node-details"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Enhanced JavaScript Application -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

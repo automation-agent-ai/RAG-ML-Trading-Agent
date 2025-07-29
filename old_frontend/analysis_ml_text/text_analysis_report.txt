@@ -1,0 +1,109 @@
+================================================================================
+TEXT-ONLY MULTICLASS OUTPERFORMANCE PREDICTION - ANALYSIS REPORT
+================================================================================
+Generated: 2025-07-24 12:53:08
+
+DATASET OVERVIEW
+----------------------------------------
+Total samples: 640
+Text features: 53
+
+TEXT FEATURE DOMAINS
+----------------------------------------
+News features: 30
+UserPosts features: 9
+Analyst features: 11
+
+RNS-DERIVED FEATURES ANALYSIS
+----------------------------------------
+RNS-derived features found: 7
+RNS features:
+  - profit_warning_present
+  - capital_raise_present
+  - board_change_present
+  - contract_award_present
+  - merger_or_acquisition_present
+  - broker_recommendation_present
+  - credit_rating_change_present
+
+MODEL PERFORMANCE SUMMARY
+----------------------------------------
+
+RandomForest:
+  Accuracy: 0.367
+  Precision (macro): 0.363
+  Precision (Positive class): 0.333
+  Recall (macro): 0.369
+  F1 Score (macro): 0.358
+
+XGBoost:
+  Accuracy: 0.367
+  Precision (macro): 0.364
+  Precision (Positive class): 0.344
+  Recall (macro): 0.368
+  F1 Score (macro): 0.362
+
+LightGBM:
+  Accuracy: 0.398
+  Precision (macro): 0.391
+  Precision (Positive class): 0.323
+  Recall (macro): 0.400
+  F1 Score (macro): 0.390
+
+LogisticRegression:
+  Accuracy: 0.281
+  Precision (macro): 0.280
+  Precision (Positive class): 0.281
+  Recall (macro): 0.281
+  F1 Score (macro): 0.277
+
+CROSS-VALIDATION RESULTS (5-Fold)
+----------------------------------------
+
+RandomForest:
+  Accuracy: 0.369 ± 0.036
+  Precision (macro): 0.373 ± 0.040
+
+XGBoost:
+  Accuracy: 0.377 ± 0.048
+  Precision (macro): 0.378 ± 0.049
+
+LightGBM:
+  Accuracy: 0.359 ± 0.034
+  Precision (macro): 0.362 ± 0.041
+
+LogisticRegression:
+  Accuracy: 0.354 ± 0.061
+  Precision (macro): 0.353 ± 0.061
+
+TOP TEXT FEATURES (RandomForest)
+----------------------------------------
+post_count: 0.0939
+buy_recommendations: 0.0813
+hold_recommendations: 0.0800
+recommendation_count: 0.0740
+unique_users: 0.0702
+avg_sentiment: 0.0651
+rumor_intensity: 0.0587
+analyst_conviction_score: 0.0572
+relevance_score: 0.0548
+engagement_score: 0.0451
+
+MODEL RECOMMENDATION
+----------------------------------------
+Best text model for Positive class precision: XGBoost
+Positive class precision: 0.344
+
+TRADING INTERPRETATION:
+- Positive class (BUY signal) precision of 34.4% means:
+  When the text model predicts a stock will be in the top 33.3% of performers,
+  it is correct 34.4% of the time.
+- This minimizes false positives (entering bad trades).
+
+PERFORMANCE vs BASELINES
+----------------------------------------
+Random baseline accuracy: 33.3%
+Best text model accuracy: 39.8%
+Improvement over random: 19.5%
+
+================================================================================

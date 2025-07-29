@@ -359,7 +359,7 @@ Train ML models using the proper 3-stage approach:
 
 ```bash
 conda activate sts
-python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models_3stage_fixed
+python train_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --output-dir models/3stage_fixed
 ```
 
 **What it does:**
@@ -392,7 +392,7 @@ Create ensemble predictions using the trained 3-stage ML pipeline:
 
 ```bash
 conda activate sts
-python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models_3stage_fixed --output-dir ml/prediction
+python predict_3stage_ml_pipeline.py --input-dir data/ml_features/balanced --model-dir models/3stage_fixed --output-dir ml/prediction
 ```
 
 **What it does:**

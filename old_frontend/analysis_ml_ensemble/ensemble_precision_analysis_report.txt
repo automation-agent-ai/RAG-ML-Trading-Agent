@@ -1,0 +1,109 @@
+ENSEMBLE PRECISION ANALYSIS REPORT
+==================================================
+
+Generated: 2025-07-15 04:49:52
+Combined dataset: 179 samples, 44 features
+Target distribution: {0: np.int64(94), 1: np.int64(85)}
+
+INDIVIDUAL MODEL PERFORMANCE (ENSEMBLE DATA)
+---------------------------------------------
+
+RandomForest:
+  Precision: 0.648 ± 0.180
+  Recall:    0.435 ± 0.225
+  F1-Score:  0.457 ± 0.151
+  AUC:       0.509 ± 0.052
+  Optimal Threshold: 0.591
+
+XGBoost:
+  Precision: 0.693 ± 0.157
+  Recall:    0.294 ± 0.166
+  F1-Score:  0.377 ± 0.139
+  AUC:       0.532 ± 0.041
+  Optimal Threshold: 0.639
+
+LightGBM:
+  Precision: 0.792 ± 0.171
+  Recall:    0.212 ± 0.096
+  F1-Score:  0.314 ± 0.103
+  AUC:       0.572 ± 0.056
+  Optimal Threshold: 0.647
+
+LogisticRegression:
+  Precision: 0.738 ± 0.148
+  Recall:    0.282 ± 0.176
+  F1-Score:  0.365 ± 0.152
+  AUC:       0.555 ± 0.034
+  Optimal Threshold: 0.641
+
+BEST INDIVIDUAL MODEL: LightGBM
+------------------------------
+Precision: 0.792
+Threshold: 0.647
+
+COMPONENT PERFORMANCE SUMMARY
+-----------------------------------
+
+FUNDAMENTALS:
+  Best Model: LogisticRegression
+  Precision: 0.611
+  Recall:    0.283
+  F1-Score:  0.343
+  AUC:       0.515
+
+TEXT:
+  Best Model: TextXGBoost
+  Precision: 0.580
+  Recall:    0.867
+  F1-Score:  0.614
+  AUC:       0.331
+
+ENSEMBLE:
+  Best Model: N/A
+  Precision: 0.800
+  Recall:    0.212
+  F1-Score:  0.309
+  AUC:       0.579
+
+ENSEMBLE METHODS PERFORMANCE
+------------------------------
+
+WeightedAverage:
+  Precision: 0.800 ± 0.163
+  Recall:    0.212 ± 0.115
+  F1-Score:  0.309 ± 0.125
+  AUC:       0.579 ± 0.057
+  Optimal Threshold: 0.599
+
+LogisticEnsemble:
+  Precision: 0.738 ± 0.148
+  Recall:    0.282 ± 0.176
+  F1-Score:  0.365 ± 0.152
+  AUC:       0.555 ± 0.034
+  Optimal Threshold: 0.619
+
+StackedEnsemble:
+  Precision: 0.689 ± 0.159
+  Recall:    0.259 ± 0.177
+  F1-Score:  0.335 ± 0.151
+  AUC:       0.525 ± 0.048
+  Optimal Threshold: 0.635
+
+VotingEnsemble:
+  Precision: 0.689 ± 0.159
+  Recall:    0.259 ± 0.177
+  F1-Score:  0.335 ± 0.151
+  AUC:       0.525 ± 0.048
+  Optimal Threshold: 0.635
+
+BEST ENSEMBLE METHOD: WeightedAverage
+------------------------------
+Precision: 0.800
+Threshold: 0.599
+
+RECOMMENDATIONS
+---------------
+- Use WeightedAverage for best precision performance
+- Monitor component performance individually
+- Consider rebalancing ensemble weights based on data drift
+- Validate thresholds on fresh data before production

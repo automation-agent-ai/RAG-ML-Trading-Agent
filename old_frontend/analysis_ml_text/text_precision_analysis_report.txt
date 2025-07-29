@@ -1,0 +1,65 @@
+TEXT-BASED PRECISION FEATURE IMPORTANCE ANALYSIS REPORT
+======================================================================
+
+Generated: 2025-07-14 21:15:39
+Dataset: 31 samples, 39 text features
+Target distribution: {0: np.int64(18), 1: np.int64(13)}
+
+TEXT MODEL CROSS-VALIDATION PERFORMANCE
+---------------------------------------------
+
+TextRandomForest:
+  Precision: 0.569 ± 0.264
+  Recall:    0.867 ± 0.267
+  F1-Score:  0.591 ± 0.138
+  AUC:       0.267 ± 0.218
+  Optimal Threshold: 0.348
+
+TextXGBoost:
+  Precision: 0.560 ± 0.224
+  Recall:    0.867 ± 0.267
+  F1-Score:  0.595 ± 0.064
+  AUC:       0.306 ± 0.044
+  Optimal Threshold: 0.263
+
+TextLightGBM:
+  Precision: 0.419 ± 0.075
+  Recall:    1.000 ± 0.000
+  F1-Score:  0.587 ± 0.075
+  AUC:       0.500 ± 0.000
+  Optimal Threshold: 0.419
+
+TextLogisticRegression:
+  Precision: 0.580 ± 0.238
+  Recall:    0.800 ± 0.267
+  F1-Score:  0.581 ± 0.075
+  AUC:       0.278 ± 0.164
+  Optimal Threshold: 0.220
+
+BEST TEXT MODEL FOR PRECISION: TextLogisticRegression
+---------------------------------------------
+Top 10 Text Features (by importance):
+ 1. userposts_controversial_topics      Importance: 0.7846  Stability: 0.668  Source: userposts
+ 2. news_count_corporate_actions        Importance: 0.5247  Stability: 0.673  Source: news
+ 3. news_sentiment_score_financial_results Importance: 0.4776  Stability: 0.646  Source: news
+ 4. userposts_community_sentiment_score Importance: 0.4516  Stability: 0.636  Source: news
+ 5. news_max_severity_financial_results Importance: 0.4353  Stability: 0.498  Source: news
+ 6. userposts_contrarian_signal         Importance: 0.3905  Stability: 0.459  Source: userposts
+ 7. news_avg_headline_spin_financial_results Importance: 0.3776  Stability: 0.555  Source: news
+ 8. userposts_coherence                 Importance: 0.3764  Stability: 0.354  Source: userposts
+ 9. news_max_severity_corporate_actions Importance: 0.3667  Stability: 0.543  Source: news
+10. news_max_severity_governance        Importance: 0.3602  Stability: 0.588  Source: news
+
+FEATURE SOURCE ANALYSIS
+-------------------------
+Average importance by source:
+  news        : 0.2206 (from 29 features)
+  userposts   : 0.2753 (from 10 features)
+  combined    : 0.0000 (from 0 features)
+
+TEXT FEATURE RECOMMENDATIONS
+------------------------------
+- Focus on 0 most stable high-importance text features
+- Use TextLogisticRegression with threshold 0.220
+- Monitor text feature stability in production
+- Consider combining news and userposts features for ensemble

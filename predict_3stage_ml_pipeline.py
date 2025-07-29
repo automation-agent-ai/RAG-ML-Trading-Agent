@@ -518,7 +518,7 @@ def main():
     parser = argparse.ArgumentParser(description='3-Stage ML Prediction Pipeline')
     parser.add_argument('--input-dir', default='data/ml_features/balanced', 
                        help='Directory containing prediction feature CSV files')
-    parser.add_argument('--model-dir', default='models_3stage_fixed', 
+    parser.add_argument('--model-dir', default='models/3stage_fixed', 
                        help='Directory containing trained models')
     parser.add_argument('--output-dir', default='ml/prediction', 
                        help='Output directory for predictions')

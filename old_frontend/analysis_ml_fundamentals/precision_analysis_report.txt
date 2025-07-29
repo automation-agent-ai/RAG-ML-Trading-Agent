@@ -1,0 +1,65 @@
+PRECISION-FOCUSED FEATURE IMPORTANCE ANALYSIS REPORT
+============================================================
+
+Generated: 2025-07-14 21:15:30
+Dataset: 179 samples, 34 features
+Target distribution: {0: np.int64(97), 1: np.int64(82)}
+
+CROSS-VALIDATION PERFORMANCE SUMMARY
+----------------------------------------
+
+RandomForest:
+  Precision: 0.597 ± 0.104
+  Recall:    0.480 ± 0.268
+  F1-Score:  0.479 ± 0.093
+  AUC:       0.536 ± 0.065
+  Optimal Threshold: 0.494
+
+XGBoost:
+  Precision: 0.602 ± 0.099
+  Recall:    0.518 ± 0.258
+  F1-Score:  0.504 ± 0.107
+  AUC:       0.541 ± 0.045
+  Optimal Threshold: 0.482
+
+LightGBM:
+  Precision: 0.599 ± 0.102
+  Recall:    0.418 ± 0.150
+  F1-Score:  0.464 ± 0.069
+  AUC:       0.538 ± 0.047
+  Optimal Threshold: 0.523
+
+LogisticRegression:
+  Precision: 0.611 ± 0.070
+  Recall:    0.283 ± 0.186
+  F1-Score:  0.343 ± 0.131
+  AUC:       0.515 ± 0.011
+  Optimal Threshold: 0.551
+
+BEST MODEL FOR PRECISION: LogisticRegression
+----------------------------------------
+Top 10 Features (by importance):
+ 1. cash_per_share                 Importance: 0.6620  Stability: 0.615
+ 2. earnings_per_share             Importance: 0.4825  Stability: 0.764
+ 3. book_value_per_share_ratio     Importance: 0.3132  Stability: 0.698
+ 4. cash_ratio                     Importance: 0.2802  Stability: 0.737
+ 5. current_ratio                  Importance: 0.2802  Stability: 0.737
+ 6. quick_ratio                    Importance: 0.2802  Stability: 0.737
+ 7. total_debt                     Importance: 0.2343  Stability: 0.683
+ 8. debt_to_assets                 Importance: 0.2056  Stability: 0.436
+ 9. net_income                     Importance: 0.2039  Stability: 0.534
+10. roe                            Importance: 0.1981  Stability: 0.457
+
+CROSS-VALIDATION INSIGHTS
+----------------------------------------
+- Optimal thresholds derived from cross-validation to avoid overfitting
+- Feature stability measured across CV folds
+- Precision-focused optimization with minimum recall constraint
+- Best achieving precision: 0.611
+
+RECOMMENDations
+----------------------------------------
+- Focus on 4 most stable high-importance features
+- Use LogisticRegression with threshold 0.551
+- Monitor feature stability in production
+- Consider ensemble of top performing models
