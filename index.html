@@ -3,264 +3,580 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 Enhanced RAG Pipeline Dashboard</title>
+    <title>Enhanced RAG Pipeline Dashboard</title>
     <link rel="stylesheet" href="/static/style.css">
-    
-    <!-- Cytoscape.js and Extensions for Knowledge Graph -->
-    <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
-    <script src="https://unpkg.com/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
-    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
-    <script src="https://unpkg.com/cytoscape-cola@2.5.1/cytoscape-cola.js"></script>
-    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
-    <script src="https://unpkg.com/webcola@3.4.0/WebCola/cola.min.js"></script>
 </head>
 <body>
-    <!-- Enhanced Navigation Header -->
-    <nav class="main-nav">
-        <div class="nav-container">
-            <h1 class="nav-title">🚀 Enhanced RAG Pipeline Dashboard</h1>
-            <div class="nav-links">
-                <button class="nav-btn active" onclick="showPage('main')">🎭 Live Theater</button>
-                <button class="nav-btn" onclick="showPage('analysis')">📊 Analysis</button>
-                <button class="nav-btn" onclick="showPage('data')">📋 Data Explorer</button>
-                <button class="nav-btn" onclick="showPage('models')">🤖 Model Performance</button>
-                <button class="nav-btn" onclick="showPage('visualizations')">🎨 Visualizations</button>
-                <button class="nav-btn" onclick="showPage('knowledge-graph')">🧠 Knowledge Graph</button>
-                <div class="theme-selector">
-                    <select id="theme-selector">
-                        <option value="default">🔵 Modern Blue</option>
-                        <option value="dark">🌙 Dark Theme</option>
-                        <option value="slate">💼 Professional Slate</option>
-                        <option value="teal">🏢 Modern Teal</option>
-                        <option value="indigo">👔 Executive Indigo</option>
-                        <option value="rose">📈 Financial Rose</option>
+    <!-- Professional Header with Theme Selector -->
+    <header>
+        <div class="header-container">
+            <a href="#" class="logo">
+                🎯 <span>Enhanced RAG Pipeline Dashboard</span>
+            </a>
+            
+            <nav class="nav-ribbon">
+                <button class="nav-tab active" data-page="live-theater">🎭 Live Prediction Theater</button>
+                <button class="nav-tab" data-page="domain-intelligence">🧠 Domain Intelligence</button>
+                <button class="nav-tab" data-page="database-explorer">🗃️ Database Explorer</button>
+                <button class="nav-tab" data-page="ml-gallery">📊 ML Results Gallery</button>
+                <button class="nav-tab" data-page="agent-predictions">🤖 Agent Predictions</button>
+                <button class="nav-tab" data-page="portfolio-scanner">🔍 Portfolio Scanner</button>
+            </nav>
+            
+            <div class="theme-controls">
+                <select id="theme-selector" class="theme-selector">
+                    <option value="default">🌟 Default Theme</option>
+                    <option value="dark">🌙 Dark Theme</option>
+                    <option value="slate">⚡ Professional Slate</option>
+                    <option value="teal">🌊 Modern Teal</option>
+                    <option value="indigo">💼 Executive Indigo</option>
+                    <option value="rose">📈 Financial Rose</option>
+                </select>
+                
+                <div class="health-indicator">
+                    <div class="health-dot" id="health-dot"></div>
+                    <span id="health-status">Healthy (250 setups)</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Live Prediction Theater -->
+        <div id="live-theater" class="page">
+            <div class="page-header">
+                <h1 class="page-title">🎭 Live Agent Prediction Theater</h1>
+                <p class="page-subtitle">Watch our 4 AI agents predict stock outperformance in real-time</p>
+            </div>
+
+            <div class="theater-controls">
+                <div class="control-group">
+                    <label for="theater-count">Number of Random Setups:</label>
+                    <input type="number" id="theater-count" min="1" max="10" value="3" class="theater-input">
+                </div>
+                <button id="start-theater" class="btn btn-primary">🎬 Start Live Prediction Show</button>
+            </div>
+
+            <!-- Agent Status Cards -->
+            <div class="agents-grid">
+                <div class="agent-card waiting" data-agent="fundamentals">
+                    <div class="agent-icon">📊</div>
+                    <div class="agent-name">Fundamentals Agent</div>
+                    <div class="agent-status">Ready</div>
+                    <div class="agent-prediction">-</div>
+                </div>
+                <div class="agent-card waiting" data-agent="news">
+                    <div class="agent-icon">📰</div>
+                    <div class="agent-name">News Agent</div>
+                    <div class="agent-status">Ready</div>
+                    <div class="agent-prediction">-</div>
+                </div>
+                <div class="agent-card waiting" data-agent="userposts">
+                    <div class="agent-icon">💬</div>
+                    <div class="agent-name">Community Agent</div>
+                    <div class="agent-status">Ready</div>
+                    <div class="agent-prediction">-</div>
+                </div>
+                <div class="agent-card waiting" data-agent="analyst_recommendations">
+                    <div class="agent-icon">📋</div>
+                    <div class="agent-name">Analyst Agent</div>
+                    <div class="agent-status">Ready</div>
+                    <div class="agent-prediction">-</div>
+                </div>
+            </div>
+
+            <!-- Live Log -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">📜 Live Prediction Log</h3>
+                </div>
+                <div class="theater-log-container" id="theater-log">
+                    <div class="log-entry initial">
+                        <span class="log-timestamp">Ready</span>
+                        <span class="log-message">Click "Start Live Prediction Show" to begin...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Prediction Results -->
+            <div class="card" id="theater-results-container" style="display: none;">
+                <div class="card-header">
+                    <h3 class="card-title">🎯 Prediction Results</h3>
+                </div>
+                <div class="results-grid" id="theater-results"></div>
+            </div>
+        </div>
+
+        <!-- Domain Intelligence Dashboard -->
+        <div id="domain-intelligence" class="page">
+            <div class="page-header">
+                <h1 class="page-title">🧠 Domain Intelligence Dashboard</h1>
+                <p class="page-subtitle">Explore insights from our 4 AI domains with t-SNE clustering and sentiment analysis</p>
+            </div>
+
+            <!-- Domain Tabs -->
+            <div class="domain-tabs">
+                <button class="domain-tab active" data-domain="news">📰 News Intelligence</button>
+                <button class="domain-tab" data-domain="fundamentals">📊 Fundamentals Intelligence</button>
+                <button class="domain-tab" data-domain="community">💬 Community Intelligence</button>
+                <button class="domain-tab" data-domain="analysts">📋 Analyst Consensus</button>
+            </div>
+
+            <!-- News Intelligence Content -->
+            <div id="domain-news" class="domain-content active">
+                <!-- t-SNE Clustering Visualization -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">🎯 News Sentiment t-SNE Clustering</h3>
+                        <p style="color: var(--text-secondary); margin: 0;">Visualize news sentiment clusters with outperformance patterns</p>
+                    </div>
+                    <div class="visualization-placeholder">
+                        <button id="generate-news-tsne" class="generate-viz-btn">📊 Generate t-SNE Visualization</button>
+                        <div id="news-tsne-viz" style="display: none;">
+                            <img id="news-tsne-image" style="max-width: 100%; height: auto; border-radius: 8px;" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Intelligence Grid -->
+                <div class="intelligence-grid">
+                    <!-- Merged Terms Box -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">🔥 Key Sentiment Terms</h3>
+                        </div>
+                        <div class="merged-terms-container">
+                            <div class="terms-section">
+                                <h4 style="color: var(--success-color);">📈 Bullish Terms</h4>
+                                <div class="term-cloud" id="news-bullish-terms">Loading...</div>
+                            </div>
+                            <div class="terms-section">
+                                <h4 style="color: var(--error-color);">📉 Bearish Terms</h4>
+                                <div class="term-cloud" id="news-bearish-terms">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sentiment Distribution -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">📊 Sentiment Distribution & Prediction Accuracy</h3>
+                        </div>
+                        <div class="sentiment-bars">
+                            <div class="sentiment-bar">
+                                <div class="bar-container">
+                                    <div class="bar positive" style="width: 45%"></div>
+                                </div>
+                                <span>Positive: 45%</span>
+                            </div>
+                            <div class="sentiment-bar">
+                                <div class="bar-container">
+                                    <div class="bar neutral" style="width: 35%"></div>
+                                </div>
+                                <span>Neutral: 35%</span>
+                            </div>
+                            <div class="sentiment-bar">
+                                <div class="bar-container">
+                                    <div class="bar negative" style="width: 20%"></div>
+                                </div>
+                                <span>Negative: 20%</span>
+                            </div>
+                        </div>
+                        <div class="viz-stats" id="news-stats">
+                            <div class="stat-item">Prediction Accuracy: 72%</div>
+                            <div class="stat-item">Avg Confidence: 68%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Fundamentals Intelligence Content -->
+            <div id="domain-fundamentals" class="domain-content">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">📊 Fundamentals Domain Analysis</h3>
+                    </div>
+                    <div class="no-data">Fundamentals analysis coming soon...</div>
+                </div>
+            </div>
+
+            <!-- Community Intelligence Content (with t-SNE) -->
+            <div id="domain-community" class="domain-content">
+                <!-- t-SNE Clustering Visualization for User Posts -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">🎯 Community Sentiment t-SNE Clustering</h3>
+                        <p style="color: var(--text-secondary); margin: 0;">Visualize user post sentiment clusters with outperformance patterns</p>
+                    </div>
+                    <div class="visualization-placeholder">
+                        <button id="generate-community-tsne" class="generate-viz-btn">📊 Generate Community t-SNE Visualization</button>
+                        <div id="community-tsne-viz" style="display: none;">
+                            <img id="community-tsne-image" style="max-width: 100%; height: auto; border-radius: 8px;" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Intelligence Grid -->
+                <div class="intelligence-grid">
+                    <!-- Merged Terms Box -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">💬 Top Community Terms</h3>
+                        </div>
+                        <div class="merged-terms-container">
+                            <div class="terms-section">
+                                <h4 style="color: var(--success-color);">📈 Bullish Discussions</h4>
+                                <div class="term-cloud" id="community-bullish-terms">Loading...</div>
+                            </div>
+                            <div class="terms-section">
+                                <h4 style="color: var(--error-color);">📉 Bearish Discussions</h4>
+                                <div class="term-cloud" id="community-bearish-terms">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sentiment Distribution -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">📊 Community Sentiment & Prediction Accuracy</h3>
+                        </div>
+                        <div class="sentiment-bars">
+                            <div class="sentiment-bar">
+                                <div class="bar-container">
+                                    <div class="bar positive" style="width: 40%"></div>
+                                </div>
+                                <span>Positive: 40%</span>
+                            </div>
+                            <div class="sentiment-bar">
+                                <div class="bar-container">
+                                    <div class="bar neutral" style="width: 38%"></div>
+                                </div>
+                                <span>Neutral: 38%</span>
+                            </div>
+                            <div class="sentiment-bar">
+                                <div class="bar-container">
+                                    <div class="bar negative" style="width: 22%"></div>
+                                </div>
+                                <span>Negative: 22%</span>
+                            </div>
+                        </div>
+                        <div class="viz-stats" id="community-stats">
+                            <div class="stat-item">Prediction Accuracy: 65%</div>
+                            <div class="stat-item">Avg Confidence: 62%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Analyst Consensus Content -->
+            <div id="domain-analysts" class="domain-content">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">📋 Analyst Recommendations</h3>
+                    </div>
+                    <div class="ratings-placeholder">
+                        <div class="no-data">Loading analyst consensus...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Database Explorer -->
+        <div id="database-explorer" class="page">
+            <div class="page-header">
+                <h1 class="page-title">🗃️ Database Explorer</h1>
+                <p class="page-subtitle">Explore your production DuckDB tables with real-time data</p>
+            </div>
+
+            <div class="database-controls">
+                <div class="table-selector">
+                    <label for="table-select">Select Table:</label>
+                    <select id="table-select">
+                        <option value="">Choose a table...</option>
+                        <option value="labels">📊 Labels (Ground Truth)</option>
+                        <option value="fundamentals_features">💰 Fundamentals Features</option>
+                        <option value="news_features">📰 News Features</option>
+                        <option value="userposts_features">👥 User Posts Features</option>
+                        <option value="analyst_recommendations_features">📋 Analyst Features</option>
+                    </select>
+                    <button id="load-table" class="action-button">Load Table</button>
+                </div>
+                <div class="data-filters">
+                    <input type="text" id="table-search" placeholder="Search in table...">
+                    <select id="performance-filter">
+                        <option value="">All Performance</option>
+                        <option value="positive">Positive (>0%)</option>
+                        <option value="neutral">Neutral (±2%)</option>
+                        <option value="negative">Negative (<0%)</option>
                     </select>
                 </div>
             </div>
-        </div>
-    </nav>
 
-    <!-- Live Agent Prediction Theater Page -->
-    <div id="main-page" class="page-content active">
-        <div class="container">
-            <!-- Live Prediction Theater -->
-            <div class="ribbon live-theater">
-                <div class="theater-header">
-                    <div class="theater-title">
-                        🎭 Live Agent Prediction Theater
-                    </div>
-                    <div class="theater-subtitle">
-                        Watch 4 AI agents analyze setups in real-time
-                    </div>
+            <div class="table-stats" id="table-stats" style="display: none;">
+                <div class="stat-card">
+                    <h4>Total Rows</h4>
+                    <span id="total-rows">-</span>
                 </div>
-                
-                <div id="theater-controls" class="theater-controls">
-                    <div class="theater-input-group">
-                        <label for="setup-count">Number of Setups</label>
-                        <input type="number" id="setup-count" class="theater-input" value="5" min="1" max="20">
-                    </div>
-                    
-                    <button id="start-theater-btn" class="theater-btn">
-                        <span>🎬</span>
-                        Start Live Prediction Theater
-                    </button>
+                <div class="stat-card">
+                    <h4>Columns</h4>
+                    <span id="total-columns">-</span>
                 </div>
-                
-                <div id="theater-stage" class="theater-stage" style="display: none;">
-                    <div class="progress-container">
-                        <div class="progress-bar">
-                            <div id="theater-progress" class="progress-fill" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    
-                    <div id="agents-status" class="agents-grid">
-                        <div class="agent-card fundamentals">
-                            <div class="agent-name">🏛️ Fundamentals Agent</div>
-                            <div class="agent-status">Ready</div>
-                        </div>
-                        <div class="agent-card news">
-                            <div class="agent-name">📰 News Agent</div>
-                            <div class="agent-status">Ready</div>
-                        </div>
-                        <div class="agent-card analyst_recommendations">
-                            <div class="agent-name">📈 Analyst Agent</div>
-                            <div class="agent-status">Ready</div>
-                        </div>
-                        <div class="agent-card userposts">
-                            <div class="agent-name">💬 Community Agent</div>
-                            <div class="agent-status">Ready</div>
-                        </div>
-                    </div>
-                    
-                    <div id="theater-log" class="theater-log"></div>
+                <div class="stat-card">
+                    <h4>Completeness</h4>
+                    <span id="data-completeness">-</span>
+                </div>
+                <div class="stat-card">
+                    <h4>Last Updated</h4>
+                    <span id="last-updated">-</span>
                 </div>
             </div>
 
-            <!-- System Health & Statistics -->
-            <div class="ribbon">
-                <div class="ribbon-header">
-                    <h2>📊 System Health & Performance</h2>
-                    <div class="health-indicator" id="health-indicator">
-                        <span class="status-dot"></span>
-                        <span id="health-status">Connecting...</span>
-                    </div>
+            <div class="data-table-container" id="data-table-container" style="display: none;">
+                <table class="data-table" id="data-table">
+                    <thead id="table-head"></thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ML Results Gallery -->
+        <div id="ml-gallery" class="page">
+            <div class="page-header">
+                <h2>📊 ML Results Gallery</h2>
+                <p>Explore your machine learning model visualizations and performance metrics</p>
+            </div>
+
+            <div class="gallery-controls">
+                <div class="category-selector">
+                    <button class="category-btn active" data-category="all">🎯 All Results</button>
+                    <button class="category-btn" data-category="ensemble">🔄 Ensemble Models</button>
+                    <button class="category-btn" data-category="text">📝 Text Analysis</button>
+                    <button class="category-btn" data-category="financial">💰 Financial Models</button>
+                    <button class="category-btn" data-category="performance">📈 Performance</button>
                 </div>
-                <div class="ribbon-content">
-                    <div class="metrics-grid" id="system-metrics">
-                        <div class="metric-card">
-                            <div class="metric-label">Total Setups</div>
-                            <div class="metric-value" id="total-setups">-</div>
-                            <div class="metric-change" id="setups-change">Loading...</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Available Models</div>
-                            <div class="metric-value" id="available-models">-</div>
-                            <div class="metric-change">All systems operational</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Active Agents</div>
-                            <div class="metric-value" id="active-agents">4</div>
-                            <div class="metric-change positive">Online</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Database Status</div>
-                            <div class="metric-value" id="db-status">-</div>
-                            <div class="metric-change" id="db-change">Checking...</div>
-                        </div>
-                    </div>
+            </div>
+
+            <div class="model-performance-summary" id="model-performance-summary">
+                <h3>🏆 Model Performance Summary</h3>
+                <div class="performance-cards" id="performance-cards">
+                    Loading model performance data...
+                </div>
+            </div>
+
+            <div class="visualization-gallery" id="visualization-gallery">
+                <div class="gallery-grid" id="gallery-grid">
+                    Loading visualizations...
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Analysis & Prediction Page -->
-    <div id="analysis-page" class="page-content">
-        <div class="container">
-            <!-- Setup Analysis -->
-            <div class="ribbon">
-                <div class="ribbon-header">
-                    <h2>🎯 Setup Analysis & Smart Predictions</h2>
+        <!-- Agent Predictions Page -->
+        <div id="agent-predictions" class="page">
+            <div class="page-header">
+                <h1 class="page-title">🤖 Agent Predictions Explorer</h1>
+                <p class="page-subtitle">Explore how our 4 AI agents find similar setups and make predictions</p>
+            </div>
+            
+            <!-- Setup Selection for Similarity Analysis -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">🔍 Setup Similarity Analysis</h3>
+                    <p style="color: var(--text-secondary); margin: 0;">Discover how agents find similar historical setups for few-shot learning</p>
                 </div>
-                <div class="ribbon-content">
-                    <div class="setup-controls">
-                        <div class="control-group">
-                            <label for="setup-select">Select Setup for Analysis:</label>
-                            <select id="setup-select">
-                                <option value="">Loading setups...</option>
-                            </select>
-                            <button id="random-setup-btn" class="secondary-btn">🎲 Random Setup</button>
+                
+                <div class="similarity-controls">
+                    <div class="setup-selector">
+                        <label for="analysis-setup-id">Choose Setup for Analysis:</label>
+                        <select id="analysis-setup-id" class="setup-select">
+                            <option value="">Select a setup...</option>
+                        </select>
+                        <button id="analyze-setup" class="btn btn-primary">🔬 Analyze Similarities</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Agent Similarity Results -->
+            <div class="agent-similarity-results" id="agent-similarity-results" style="display: none;">
+                <div class="agents-tabs">
+                    <button class="agent-tab active" data-agent="fundamentals">📊 Fundamentals Agent</button>
+                    <button class="agent-tab" data-agent="news">📰 News Agent</button>
+                    <button class="agent-tab" data-agent="userposts">💬 Community Agent</button>
+                    <button class="agent-tab" data-agent="analyst_recommendations">📋 Analyst Agent</button>
+                </div>
+                
+                <!-- Fundamentals Agent Similarities -->
+                <div id="agent-fundamentals" class="agent-similarity-content active">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">📊 Fundamentals Agent - Similar Setups</h3>
+                            <p style="color: var(--text-secondary); margin: 0;">Based on financial metrics similarity (ROE, ROA, Debt Ratios, etc.)</p>
                         </div>
-                        <div class="control-group">
-                            <button id="predict-btn" class="primary-btn" disabled>
-                                <span>🔮</span>
-                                Generate Enhanced Prediction
-                            </button>
-                            <button id="similar-btn" class="secondary-btn" disabled>
-                                <span>🔍</span>
-                                Find Similar Setups
-                            </button>
+                        <div class="similarity-grid" id="fundamentals-similarities">
+                            <div class="no-data">Select a setup to analyze similarities</div>
                         </div>
                     </div>
+                </div>
+                
+                <!-- News Agent Similarities -->
+                <div id="agent-news" class="agent-similarity-content">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">📰 News Agent - Similar Setups</h3>
+                            <p style="color: var(--text-secondary); margin: 0;">Based on news sentiment and content similarity</p>
+                        </div>
+                        <div class="similarity-grid" id="news-similarities">
+                            <div class="no-data">Select a setup to analyze similarities</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Community Agent Similarities -->
+                <div id="agent-userposts" class="agent-similarity-content">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">💬 Community Agent - Similar Setups</h3>
+                            <p style="color: var(--text-secondary); margin: 0;">Based on user posts and community sentiment similarity</p>
+                        </div>
+                        <div class="similarity-grid" id="userposts-similarities">
+                            <div class="no-data">Select a setup to analyze similarities</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Analyst Agent Similarities -->
+                <div id="agent-analyst_recommendations" class="agent-similarity-content">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">📋 Analyst Agent - Similar Setups</h3>
+                            <p style="color: var(--text-secondary); margin: 0;">Based on analyst recommendations and ratings similarity</p>
+                        </div>
+                        <div class="similarity-grid" id="analyst_recommendations-similarities">
+                            <div class="no-data">Select a setup to analyze similarities</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Live Agent Prediction Terminal -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">💻 Live Agent Prediction Terminal</h3>
+                        <p style="color: var(--text-secondary); margin: 0;">Watch the agent prediction process in real-time with terminal output</p>
+                    </div>
                     
-                    <div id="prediction-results" class="prediction-section" style="display: none;">
-                        <h3>📊 Enhanced Prediction Analysis</h3>
-                        <div class="metrics-grid">
-                            <div class="metric-card">
-                                <div class="metric-label">AI Prediction</div>
-                                <div class="metric-value" id="prediction-value">-</div>
-                                <div class="metric-change" id="prediction-confidence">-</div>
-                            </div>
-                            <div class="metric-card">
-                                <div class="metric-label">Probability</div>
-                                <div class="metric-value" id="probability-value">-</div>
-                                <div class="metric-change">Confidence Score</div>
-                            </div>
-                            <div class="metric-card">
-                                <div class="metric-label">Actual Result</div>
-                                <div class="metric-value" id="actual-value">-</div>
-                                <div class="metric-change" id="accuracy-indicator">-</div>
-                            </div>
-                            <div class="metric-card">
-                                <div class="metric-label">Similar Cases</div>
-                                <div class="metric-value" id="similar-count">-</div>
-                                <div class="metric-change">Historical matches</div>
-                            </div>
+                    <div class="terminal-interface">
+                        <div class="terminal-controls">
+                            <button id="run-single-prediction" class="btn btn-primary">▶️ Run Single Agent Prediction</button>
+                            <button id="clear-terminal" class="btn-secondary">🗑️ Clear Terminal</button>
                         </div>
                         
-                        <div class="prediction-details">
-                            <div class="detail-section">
-                                <h4>🔍 AI Reasoning</h4>
-                                <div id="ai-reasoning" class="reasoning-text">-</div>
+                        <div class="terminal-output" id="agent-terminal">
+                            <div class="terminal-line">
+                                <span class="terminal-prompt">user@rag-pipeline:~$</span> 
+                                <span class="terminal-text">Ready to run agent prediction...</span>
                             </div>
-                        </div>
-                    </div>
-
-                    <div id="similar-results" class="similar-section" style="display: none;">
-                        <h3>🔍 Similar Historical Cases</h3>
-                        <div class="data-table-container">
-                            <div class="table-header">
-                                <div class="table-title">Similar Setups Based on AI Embeddings</div>
-                                <input type="text" class="table-search" placeholder="Search similar cases..." id="similar-search">
-                            </div>
-                            <table class="data-table" id="similar-table">
-                                <thead>
-                                    <tr>
-                                        <th>Setup ID</th>
-                                        <th>Similarity Score</th>
-                                        <th>Actual Outcome</th>
-                                        <th>Prediction Class</th>
-                                    </tr>
-                                </thead>
-                                <tbody></tbody>
-                            </table>
                         </div>
                     </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Portfolio Scanner -->
-            <div class="ribbon">
-                <div class="ribbon-header">
-                    <h2>🔍 Intelligent Portfolio Scanner</h2>
+        <!-- Portfolio Scanner -->
+        <div id="portfolio-scanner" class="page">
+            <div class="page-header">
+                <h1 class="page-title">🔍 Portfolio Scanner</h1>
+                <p class="page-subtitle">Scan for trading opportunities using AI predictions</p>
+            </div>
+
+            <div class="scanner-controls">
+                <div class="scan-parameters">
+                    <div class="param-group">
+                        <label for="scan-start-date">Start Date:</label>
+                        <input type="date" id="scan-start-date">
+                    </div>
+                    <div class="param-group">
+                        <label for="scan-end-date">End Date:</label>
+                        <input type="date" id="scan-end-date">
+                    </div>
+                    <div class="param-group">
+                        <label for="min-confidence">Min Confidence:</label>
+                        <input type="range" id="min-confidence" min="0" max="1" step="0.1" value="0.6">
+                        <span id="confidence-value">60%</span>
+                    </div>
+                    <div class="param-group">
+                        <label for="prediction-class">Prediction Class:</label>
+                        <select id="prediction-class">
+                            <option value="all">All Classes</option>
+                            <option value="positive">Positive Only</option>
+                            <option value="negative">Negative Only</option>
+                            <option value="neutral">Neutral Only</option>
+                        </select>
+                    </div>
+                    <button id="start-scan" class="action-button">🔍 Start Scan</button>
                 </div>
-                <div class="ribbon-content">
-                    <div class="scanner-controls">
-                        <div class="control-group">
-                            <label for="start-date">Start Date:</label>
-                            <input type="date" id="start-date" class="theater-input">
+            </div>
+
+            <div class="scan-results" id="scan-results" style="display: none;">
+                <h3>📊 Scan Results</h3>
+                <div class="results-summary" id="results-summary"></div>
+                <div class="results-table-container">
+                    <table class="results-table" id="results-table">
+                        <thead>
+                            <tr>
+                                <th>Setup ID</th>
+                                <th>Ticker</th>
+                                <th>Prediction</th>
+                                <th>Confidence</th>
+                                <th>Actual</th>
+                                <th>Class</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="results-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- SQL Query Interface -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">🔎 Setup Research Interface</h3>
+                    <p style="color: var(--text-secondary); margin: 0;">Use predefined queries to research specific setups in detail</p>
+                </div>
+                
+                <div class="sql-interface">
+                    <div class="query-controls">
+                        <div class="input-group">
+                            <label for="research-ticker">Ticker Symbol:</label>
+                            <input type="text" id="research-ticker" placeholder="e.g., AAPL" class="setup-input">
                         </div>
-                        <div class="control-group">
-                            <label for="end-date">End Date:</label>
-                            <input type="date" id="end-date" class="theater-input">
+                        
+                        <div class="input-group">
+                            <label for="predefined-query-select">Quick Analysis:</label>
+                            <select id="predefined-query-select" class="setup-input">
+                                <option value="">Choose analysis type...</option>
+                                <option value="top-user-posts">📝 Top 10 Latest User Posts</option>
+                                <option value="latest-rns-news">📰 Latest RNS News</option>
+                                <option value="analyst-recommendations">📋 Latest Analyst Recommendations</option>
+                                <option value="fundamentals-overview">💰 Fundamentals Overview</option>
+                                <option value="sentiment-analysis">😊 Sentiment Analysis Summary</option>
+                            </select>
+                            <button id="run-predefined-query" class="btn btn-primary">🚀 Run Analysis</button>
                         </div>
-                        <div class="control-group">
-                            <label for="min-probability">Min Probability:</label>
-                            <input type="range" id="min-probability" min="0" max="1" step="0.1" value="0.5">
-                            <span id="probability-display">50%</span>
-                        </div>
-                        <button id="scan-btn" class="primary-btn">
-                            <span>🔍</span>
-                            Scan Portfolio
-                        </button>
                     </div>
                     
-                    <div id="scanner-results" style="display: none;">
-                        <div class="data-table-container">
-                            <div class="table-header">
-                                <div class="table-title">High-Probability Investment Opportunities</div>
-                            </div>
-                            <table class="data-table" id="scan-table">
-                                <thead>
-                                    <tr>
-                                        <th>Setup ID</th>
-                                        <th>Probability</th>
-                                        <th>Confidence</th>
-                                        <th>Predicted Return</th>
-                                        <th>Risk Level</th>
-                                    </tr>
-                                </thead>
-                                <tbody></tbody>
-                            </table>
+                    <div class="custom-sql-section">
+                        <label for="custom-sql">Custom SQL Query:</label>
+                        <textarea id="custom-sql" placeholder="SELECT * FROM similarity_predictions WHERE setup_id LIKE '%AAPL%' LIMIT 10;" rows="3"></textarea>
+                        <button id="execute-custom-sql" class="btn btn-primary">▶️ Execute Query</button>
+                    </div>
+                    
+                    <div class="query-results" id="sql-query-results" style="display: none;">
+                        <div class="results-header">
+                            <h4>Query Results</h4>
+                            <button class="close-results-btn" onclick="document.getElementById('sql-query-results').style.display='none'">✕</button>
+                        </div>
+                        <div class="sql-results-table-container">
+                            <div id="sql-results-content"></div>
                         </div>
                     </div>
                 </div>
@@ -268,145 +584,21 @@
         </div>
     </div>
 
-    <!-- Data Explorer Page -->
-    <div id="data-page" class="page-content">
-        <div class="container">
-            <!-- Data Overview -->
-            <div class="ribbon">
-                <div class="ribbon-header">
-                    <h2>📋 Interactive Data Explorer</h2>
-                </div>
-                <div class="ribbon-content">
-                    <div class="data-tabs">
-                        <button class="tab-btn active" onclick="showDataTab('fundamentals')">🏛️ Fundamentals</button>
-                        <button class="tab-btn" onclick="showDataTab('news')">📰 News Analysis</button>
-                        <button class="tab-btn" onclick="showDataTab('userposts')">💬 Community Sentiment</button>
-                        <button class="tab-btn" onclick="showDataTab('analyst')">📈 Analyst Coverage</button>
-                    </div>
-                    
-                    <div id="data-content">
-                        <div class="data-table-container">
-                            <div class="table-header">
-                                <div class="table-title">Select a data category above</div>
-                                <input type="text" class="table-search" placeholder="Search data..." id="data-search">
-                            </div>
-                            <div id="data-table-placeholder" class="text-center p-4">
-                                <p>Choose a data category to explore comprehensive AI-extracted features</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999; align-items: center; justify-content: center;">
+        <div style="background: var(--card-background); padding: 2rem; border-radius: 12px; text-align: center; min-width: 300px;">
+            <div style="width: 40px; height: 40px; border: 4px solid var(--border-color); border-top: 4px solid var(--primary-color); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 1rem;"></div>
+            <div id="loading-text" style="color: var(--text-primary); font-weight: 500;">Loading...</div>
         </div>
     </div>
 
-    <!-- Model Performance Page -->
-    <div id="models-page" class="page-content">
-        <div class="container">
-            <!-- Model Performance Comparison -->
-            <div class="ribbon">
-                <div class="ribbon-header">
-                    <h2>🤖 AI Model Performance Dashboard</h2>
-                </div>
-                <div class="ribbon-content">
-                    <div class="data-table-container">
-                        <div class="table-header">
-                            <div class="table-title">Machine Learning Model Comparison</div>
-                        </div>
-                        <table class="data-table" id="model-performance-table">
-                            <thead>
-                                <tr>
-                                    <th>Model</th>
-                                    <th>Precision</th>
-                                    <th>Recall</th>
-                                    <th>F1-Score</th>
-                                    <th>AUC</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                    
-                    <div class="metrics-grid" id="model-metrics">
-                        <!-- Model metrics will be populated here -->
-                    </div>
-                </div>
-            </div>
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
 
-            <!-- Feature Importance Analysis -->
-            <div class="ribbon">
-                <div class="ribbon-header">
-                    <h2>🎯 Feature Importance & Model Insights</h2>
-                </div>
-                <div class="ribbon-content">
-                    <div class="feature-analysis" id="feature-importance">
-                        <p class="text-center">Advanced feature importance analysis and model interpretability coming soon...</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Visualizations Page -->
-    <div id="visualizations-page" class="page-content">
-        <div class="container">
-            <!-- Visualization Gallery -->
-            <div class="ribbon">
-                <div class="ribbon-header">
-                    <h2>🎨 Interactive Analysis Gallery</h2>
-                </div>
-                <div class="ribbon-content">
-                    <div class="viz-categories" id="viz-categories">
-                        <!-- Categories will be populated dynamically -->
-                    </div>
-                    
-                    <div class="viz-gallery" id="viz-gallery">
-                        <p class="text-center">Loading visualization gallery...</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Knowledge Graph Page -->
-    <div id="knowledge-graph-page" class="page-content">
-        <div class="container">
-            <!-- Knowledge Graph Visualization -->
-            <div class="ribbon">
-                <div class="ribbon-header">
-                    <h2>🧠 AI Knowledge Graph Explorer</h2>
-                </div>
-                <div class="ribbon-content">
-                    <div class="kg-controls">
-                        <button class="secondary-btn" onclick="initializeKnowledgeGraph()">
-                            <span>🔄</span>
-                            Initialize Graph
-                        </button>
-                        <button class="secondary-btn" onclick="findSimilarNodes()">
-                            <span>🔍</span>
-                            Find Similar Nodes
-                        </button>
-                        <button class="secondary-btn" onclick="exportGraph()">
-                            <span>💾</span>
-                            Export Graph
-                        </button>
-                    </div>
-                    
-                    <div id="knowledge-graph-container" style="height: 600px; border: 2px solid var(--border-color); border-radius: 12px; background: var(--card-background);">
-                        <p class="text-center p-4">Click "Initialize Graph" to load the knowledge graph visualization</p>
-                    </div>
-                    
-                    <div id="graph-info-panel" style="display: none;">
-                        <h4>Node Information</h4>
-                        <div id="node-details"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Enhanced JavaScript Application -->
-    <script src="/static/app.js"></script>
+    <script src="static/app.js"></script>
 </body>
+</html>
+</html>
+</html>
+</html>
 </html>
