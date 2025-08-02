@@ -27,37 +27,51 @@ env/
 venv/
 ENV/
 
-# DuckDB files
+# DuckDB files (Large database files - upload separately)
 *.duckdb
 *.duckdb.wal
 *.duckdb.tmp/
-data/*.duckdb
-data/*.duckdb.wal
+data/*.duckdb*
 data/sentiment_system.duckdb*
 data/prediction_features.duckdb*
+data/ml_pipeline.duckdb*
 
-# LanceDB files
+# LanceDB files (Vector database - upload separately)
 *.lance/
 data/lancedb_store/
 data/storage_lancedb_store/
 lancedb_store/
 storage/lancedb_store/
+storage/
 
-# CSV files - exclude only those with 20250727 in name
+# Generated CSV files (Can be regenerated)
 *.csv
-!*20250727*.csv
+data/**/*.csv
+!data/label_thresholds.json
+!data/*setups.txt
 
-# Output directories
+# ML Pipeline Output directories (Generated content)
 data/ml_pipeline_output/
 data/ml_features/
+data/ml_features_clean/
 data/predictions/
+data/predictions_corrected/
 data/results/
-data/visualizations/
+data/leakage_analysis/
+ml/analysis/
+ml/prediction/
+evaluation_results/
+test_output/
+visualizations/
+
+# Model directories (Large files - can be re-downloaded)
+models/sentence_transformers/
 models/text/
 models/financial/
-data/leakage_analysis/
-test_output/
-data/ml_features_clean/
+models/ensemble/
+models/combined/
+models/3stage*/
+models_clean/
 
 # Temporary files
 *.tmp
@@ -67,10 +81,9 @@ data/ml_features_clean/
 *.swo
 *~
 
-# Cached model files
-models/sentence_transformers/
-models/ensemble/
-models_clean/
+# Cache files
+.cache/
+cache/
 
 # IDE
 .idea/
@@ -91,10 +104,43 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Pickle files
+# Pickle files (Large serialized data)
 *.pkl
 *.pickle
+data/*.pkl
+data/**/*.pkl
 
 # Embedding files
 *.npy
-*.npz 
+*.npz
+
+# Large media files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+*.svg
+
+# Backup files
+*backup*
+*_backup_*
+
+# Configuration overrides
+config_local.py
+settings_local.py
+
+# Large text files (except essential setup files)
+*.txt
+!data/all_setups.txt
+!data/fundamentals_setups.txt
+!data/training_setups.txt
+!data/prediction_setups.txt
+!data/test_setups.txt
+!requirements.txt
+!README.md
+
+# Exclude OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini 
