@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV USE_CACHED_MODELS=true
-ENV PORT=8001
+ENV PORT=8300
 ENV HOST=0.0.0.0
 
 # Create directories for models and data

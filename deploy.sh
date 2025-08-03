@@ -14,7 +14,7 @@ CONTAINER_NAME="trading-agent-container"
 IMAGE_NAME="trading-agent:latest"
 NGINX_CONFIG="/etc/nginx/sites-available/trading-agent.conf"
 NGINX_ENABLED="/etc/nginx/sites-enabled/trading-agent.conf"
-PORT=8001
+PORT=8300
 
 # Colors for output
 RED='\033[0;31m'

@@ -16,14 +16,14 @@ services:
     command: ["python", "start_dashboard.py", "--no-browser"]
     environment:
       - PYTHONUNBUFFERED=1
-      - PORT=8001
+      - PORT=8300
       - HOST=0.0.0.0
       - USE_CACHED_MODELS=true
       - ENVIRONMENT=production
     restart: unless-stopped
     image: trading-agent:latest
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8300/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
