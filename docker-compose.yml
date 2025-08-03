@@ -1,0 +1,30 @@
+services:
+  trading-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading-agent-container
+    network_mode: "host"
+    volumes:
+      # Mount data directory for persistence
+      - ./data:/app/data
+      # Mount models directory for caching
+      - ./models:/app/models
+      # Mount source code for development (optional)
+      - .:/app
+    working_dir: /app
+    command: ["python", "start_dashboard.py", "--no-browser"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PORT=8001
+      - HOST=0.0.0.0
+      - USE_CACHED_MODELS=true
+      - ENVIRONMENT=production
+    restart: unless-stopped
+    image: trading-agent:latest
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

@@ -1,0 +1,15 @@
+services:
+  ingestion-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ingestion-container
+    network_mode: "host"
+    volumes:
+      - .:/app
+    working_dir: /app/frontend
+    command: ["python", "start.py"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - BACKEND_PORT=8185
+    image: ingestion-pipeline:latest

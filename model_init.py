@@ -21,9 +21,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Set environment variables for model caching
-os.environ['TRANSFORMERS_CACHE'] = os.path.join('models', 'cache')
-os.environ['HF_HOME'] = os.path.join('models', 'hub')
-os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.join('models', 'sentence_transformers')
+os.environ['TRANSFORMERS_CACHE'] = 'models/cache'
+os.environ['HF_HOME'] = 'models/hub'
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = 'models/sentence_transformers'
 
 def init_models():
     """Initialize models from cache"""
@@ -32,7 +32,7 @@ def init_models():
         
         # Initialize the model from cache
         model_name = 'sentence-transformers/all-MiniLM-L6-v2'
-        cache_dir = os.path.join('models', 'sentence_transformers')
+        cache_dir = 'models/sentence_transformers'
         
         logger.info(f"Initializing model {model_name} from cache")
         model = SentenceTransformer(model_name, cache_folder=cache_dir)

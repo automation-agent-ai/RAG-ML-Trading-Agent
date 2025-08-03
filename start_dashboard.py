@@ -7,6 +7,7 @@ One command to start the entire Enhanced RAG Pipeline Dashboard.
 Automatically handles backend startup, browser opening, and cleanup.
 """
 
+import os
 import sys
 import time
 import webbrowser
@@ -57,6 +58,8 @@ def main():
     parser = argparse.ArgumentParser(description="Enhanced RAG Pipeline Dashboard")
     parser.add_argument("--full", action="store_true", 
                        help="Use full backend with real agents (slower startup)")
+    parser.add_argument("--no-browser", action="store_true",
+                       help="Don't automatically open browser")
     args = parser.parse_args()
     
     # Choose backend
@@ -85,40 +88,51 @@ def main():
             import backend_fast
             app = backend_fast.app
         
+        # Get configuration from environment
+        host = os.getenv("HOST", "0.0.0.0")
+        port = int(os.getenv("PORT", "8000"))
+        
         # Start uvicorn
         import uvicorn
         
         print_status("Backend server starting...", "LOADING")
-        print_status("Opening browser in 3 seconds...")
-        
-        # Open browser after short delay
-        def open_browser():
-            time.sleep(3)
-            try:
-                webbrowser.open("http://localhost:8000")
-                print_status("Browser opened to http://localhost:8000", "SUCCESS")
-            except:
-                print_status("Could not open browser automatically", "WARNING")
-                print_status("Please open: http://localhost:8000", "INFO")
-        
-        import threading
-        browser_thread = threading.Thread(target=open_browser, daemon=True)
-        browser_thread.start()
+        # Auto-open browser after slight delay (unless disabled)
+        if not args.no_browser:
+            print_status("Opening browser in 3 seconds...")
+            
+            # Open browser after short delay
+            def open_browser():
+                time.sleep(3)
+                try:
+                    webbrowser.open(f"http://{host}:{port}")
+                    print_status(f"Browser opened to http://{host}:{port}", "SUCCESS")
+                except:
+                    print_status("Could not open browser automatically", "WARNING")
+                    print_status(f"Please open: http://{host}:{port}", "INFO")
+            
+            import threading
+            browser_thread = threading.Thread(target=open_browser, daemon=True)
+            browser_thread.start()
+        else:
+            print_status("Browser auto-open disabled", "INFO")
         
         # Print final instructions
         print("\n" + "="*60)
         print("🎉 Enhanced RAG Pipeline Dashboard")
-        print("   🔗 URL: http://localhost:8000")
-        print("   📖 API: http://localhost:8000/docs")
-        print("   ❤️  Health: http://localhost:8000/api/health")
+        print(f"   🔗 URL: http://{host}:{port}")
+        print(f"   📖 API: http://{host}:{port}/docs")
+        print(f"   ❤️  Health: http://{host}:{port}/api/health")
         print("="*60)
         print(f"   ⚡ Mode: {mode_name}")
+        print(f"   🌐 Host: {host}")
+        print(f"   🚪 Port: {port}")
         print("   📋 Features: Live Theater, Analysis, Scanner, Viz")
         print("   ⚠️  Press Ctrl+C to stop")
         print("="*60)
         
         # Start the server
-        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
+        print_status(f"Starting uvicorn server on {host}:{port}...", "LOADING")
+        uvicorn.run(app, host=host, port=port, log_level="info")
         
     except KeyboardInterrupt:
         print_status("\nShutting down dashboard...", "INFO")
